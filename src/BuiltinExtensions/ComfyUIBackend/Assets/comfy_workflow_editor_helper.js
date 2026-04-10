@@ -30,6 +30,9 @@ let swarmComfyInjectedHeaderSpacer = null, swarmComfySideToolbar = null, swarmCo
 
 let swarmComfyHasPinia = false;
 
+/** 공용 큐/히스토리/이미지 피드를 가리는 데 사용하는 문구 목록이다. */
+let comfySharedUiLabels = ['Show Image Feed', 'Image Feed', '이미지 피드'];
+
 /** Regex for stale rgthree compare temp files that should not survive workflow reloads. */
 let comfyRgthreeTempUrlPattern = /rgthree\.compare\._temp_[^"'&\s]*/i;
 
@@ -122,6 +125,34 @@ function comfyVueEditLocale(key, val) {
     }
     target[key.split('.').pop()] = val;
     i18n.setLocaleMessage(currentLocale, current);
+}
+
+/** Comfy iframe 안에서 공용 이미지 피드 토글과 큐/히스토리 팝업을 숨긴다. */
+function comfyHideSharedUiPanels() {
+    let doc = comfyFrame()?.contentWindow?.document;
+    if (!doc) {
+        return;
+    }
+    for (let elem of doc.querySelectorAll('label, button, span, div, h1, h2, h3, h4, h5, h6')) {
+        let text = (elem.textContent || '').trim();
+        if (!text || text.length > 40 || !comfySharedUiLabels.includes(text)) {
+            continue;
+        }
+        let checkboxWrap = elem.closest('label, .form-check, .p-inputswitch, .p-toggleswitch');
+        if (checkboxWrap) {
+            let checkbox = checkboxWrap.querySelector('input[type="checkbox"]');
+            if (checkbox?.checked) {
+                checkbox.checked = false;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            checkboxWrap.style.display = 'none';
+            continue;
+        }
+        let popup = elem.closest('[role="dialog"], .p-dialog, .p-overlaypanel, .p-popover, .p-menu, .panel, .sidebar-item-panel, .comfyui-menu');
+        if (popup) {
+            popup.style.display = 'none';
+        }
+    }
 }
 
 function comfyFixMenuLocation() {
@@ -222,14 +253,51 @@ function comfyFixMenuLocation() {
             swarmComfyHasPinia = true;
         }
     }
+    comfyHideSharedUiPanels();
 }
 
 setTimeout(comfyFixMenuLocation, 10 * 1000);
 
 let comfyEnableInterval = null;
 
+/** Comfy Workflow 완료 후 History -> Gallery 동기화를 늦춰서 한 번만 실행하는 타이머다. */
+let comfyHistorySyncTimer = null;
+
 let comfyFailedToLoad = translatable(`Failed to load ComfyUI Workflow backend. The server may still be loading.`);
 let comfyTryAgain = translatable(`Try Again?`);
+
+/**
+ * Comfy Workflow 완료 결과를 현재 SwarmUI Gallery에 동기화한다.
+ */
+async function comfySyncHistoryToGallery() {
+    let frameWindow = comfyFrame()?.contentWindow;
+    if (!frameWindow) {
+        return;
+    }
+    try {
+        await frameWindow.fetch('/ComfyBackendDirect/history');
+    }
+    catch (error) {
+        console.warn('SwarmUI Gallery history sync failed.', error);
+        return;
+    }
+    if (typeof refreshImageGalleryBrowser === 'function') {
+        refreshImageGalleryBrowser();
+    }
+}
+
+/**
+ * Comfy Workflow 완료 직후 Gallery 동기화를 예약한다.
+ */
+function comfyScheduleHistorySync(delayMs = 250) {
+    if (comfyHistorySyncTimer) {
+        clearTimeout(comfyHistorySyncTimer);
+    }
+    comfyHistorySyncTimer = setTimeout(() => {
+        comfyHistorySyncTimer = null;
+        comfySyncHistoryToGallery();
+    }, delayMs);
+}
 
 /**
  * Callback triggered when the ComfyUI workflow frame loads.
@@ -254,6 +322,7 @@ function comfyOnLoadCallback() {
         comfyReconfigureQuickload();
         let comfyRefreshControlInterval = setInterval(() => {
             let app = comfyFrame().contentWindow.app;
+            let api = comfyFrame().contentWindow.api || comfyFrame().contentWindow.swarmApiDirect;
             if (!app) {
                 return;
             }
@@ -272,7 +341,17 @@ function comfyOnLoadCallback() {
             if (spinner) {
                 spinner.remove();
             }
+            comfyHideSharedUiPanels();
             comfyFixMenuLocation();
+            if (api && !api.swarmHasGallerySyncHooks) {
+                api.addEventListener('executed', (event) => {
+                    if (event?.detail?.output) {
+                        comfyScheduleHistorySync();
+                    }
+                });
+                api.addEventListener('execution_success', () => comfyScheduleHistorySync());
+                api.swarmHasGallerySyncHooks = true;
+            }
             clearInterval(comfyRefreshControlInterval);
         }, 500);
         if (getCookie('comfy_domulti') == 'true') {

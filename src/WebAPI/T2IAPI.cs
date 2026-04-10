@@ -30,6 +30,7 @@ public static class T2IAPI
         API.RegisterAPICall(GenerateText2ImageWS, true, Permissions.BasicImageGeneration);
         API.RegisterAPICall(AddImageToHistory, true, Permissions.BasicImageGeneration);
         API.RegisterAPICall(ListImages, false, Permissions.ViewImageHistory);
+        API.RegisterAPICall(ListIndexedImages, false, Permissions.ViewImageHistory);
         API.RegisterAPICall(ToggleImageStarred, true, Permissions.UserStarImages);
         API.RegisterAPICall(OpenImageFolder, true, Permissions.LocalImageFolder);
         API.RegisterAPICall(DeleteImage, true, Permissions.UserDeleteImage);
@@ -334,6 +335,7 @@ public static class T2IAPI
             else
             {
                 (url, filePath) = session.SaveImage(image, actualIndex, thisParams, metadata);
+                UserOutputHistoryIndex.RecordOutput(session, url, filePath, metadata, $"{thisParams.UserRequestId}", actualIndex);
             }
             if (url == "ERROR")
             {
@@ -507,7 +509,8 @@ public static class T2IAPI
         Logs.Info($"User {session.User.UserID} stored an image to history.");
         (Task<MediaFile> imgTask, string metadata) = user_input.SourceSession.ApplyMetadata(img, user_input, 1);
         T2IEngine.ImageOutput outputImage = new() { File = img as Image, ActualFileTask = imgTask };
-        (string path, _) = session.SaveImage(outputImage, 0, user_input, metadata);
+        (string path, string localPath) = session.SaveImage(outputImage, 0, user_input, metadata);
+        UserOutputHistoryIndex.RecordOutput(session, path, localPath, metadata, $"{user_input.UserRequestId}", 0);
         return new() { ["images"] = new JArray() { new JObject() { ["image"] = path, ["batch_index"] = "0", ["request_id"] = $"{user_input.UserRequestId}", ["metadata"] = metadata } } };
     }
 
@@ -530,12 +533,17 @@ public static class T2IAPI
         long timeStart = Environment.TickCount64;
         int limit = sortBy == ImageHistorySortMode.Name ? maxInHistory : Math.Max(maxInHistory, maxScanned);
         (string path, string consoleError, string userError) = WebServer.CheckFilePath(root, rawPath);
-        path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         if (consoleError is not null)
         {
             Logs.Error(consoleError);
             return new JObject() { ["error"] = userError };
         }
+        if (!UserImageHistoryHelper.ValidatePathAccess(session.User, root, path, out string accessError))
+        {
+            Logs.Warning($"User {session.User.UserID} tried to browse shared output path '{rawPath}' without permission.");
+            return new JObject() { ["error"] = accessError };
+        }
+        path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         try
         {
             ConcurrentDictionary<string, string> dirsConc = [];
@@ -587,11 +595,14 @@ public static class T2IAPI
             {
                 rawRefPath = "";
             }
-            foreach (string specialFolder in UserImageHistoryHelper.SharedSpecialFolders.Keys)
+            if (UserImageHistoryHelper.CanAccessSharedSpecialFolders(session.User))
             {
-                if (specialFolder.StartsWith(rawRefPath))
+                foreach (string specialFolder in UserImageHistoryHelper.SharedSpecialFolders.Keys)
                 {
-                    addDirs(specialFolder[rawRefPath.Length..], 1);
+                    if (specialFolder.StartsWith(rawRefPath))
+                    {
+                        addDirs(specialFolder[rawRefPath.Length..], 1);
+                    }
                 }
             }
             while (tasks.Any(t => !t.Value.IsCompleted))
@@ -712,6 +723,28 @@ public static class T2IAPI
         return GetListAPIInternal(session, path, root, HistoryExtensions, f => true, depth, sortMode, sortReverse);
     }
 
+    [API.APIDescription("현재 인스턴스가 기록한 결과물 목록을 반환한다.",
+        """
+            "folders": ["Folder1", "Folder2"],
+            "files":
+            [
+                {
+                    "src": "path/to/image.jpg",
+                    "metadata": "some-metadata",
+                    "entry_id": "out_abc123",
+                    "url": "OutputIndex/out_abc123"
+                }
+            ]
+        """)]
+    public static async Task<JObject> ListIndexedImages(Session session,
+        [API.APIParameter("가상 폴더 경로다. 루트는 빈 문자열이다.")] string path,
+        [API.APIParameter("최대 탐색 깊이다.")] int depth,
+        [API.APIParameter("정렬 기준이다. `Name` 또는 `Date`만 허용한다.")] string sortBy = "Date",
+        [API.APIParameter("역정렬 여부다.")] bool sortReverse = false)
+    {
+        return UserOutputHistoryIndex.ListOutputs(session, path, depth, sortBy, sortReverse);
+    }
+
     [API.APIDescription("Open an image folder in the file explorer. Used for local users directly.", "\"success\": true")]
     public static async Task<JObject> OpenImageFolder(Session session,
         [API.APIParameter("The path to the image to show in the image folder.")] string path)
@@ -723,6 +756,11 @@ public static class T2IAPI
         {
             Logs.Error(consoleError);
             return new JObject() { ["error"] = userError };
+        }
+        if (!UserImageHistoryHelper.ValidatePathAccess(session.User, root, path, out string accessError))
+        {
+            Logs.Warning($"User {session.User.UserID} tried to open shared output path '{origPath}' without permission.");
+            return new JObject() { ["error"] = accessError };
         }
         path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         if (!File.Exists(path))
@@ -763,6 +801,11 @@ public static class T2IAPI
         {
             Logs.Error(consoleError);
             return new JObject() { ["error"] = userError };
+        }
+        if (!UserImageHistoryHelper.ValidatePathAccess(session.User, root, path, out string accessError))
+        {
+            Logs.Warning($"User {session.User.UserID} tried to delete shared output path '{origPath}' without permission.");
+            return new JObject() { ["error"] = accessError };
         }
         path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         if (!File.Exists(path))
@@ -805,6 +848,11 @@ public static class T2IAPI
         {
             Logs.Error(consoleError);
             return new JObject() { ["error"] = userError };
+        }
+        if (!UserImageHistoryHelper.ValidatePathAccess(session.User, root, path, out string accessError))
+        {
+            Logs.Warning($"User {session.User.UserID} tried to star shared output path '{origPath}' without permission.");
+            return new JObject() { ["error"] = accessError };
         }
         path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         string pathBeforeDot = path.BeforeLast('.');

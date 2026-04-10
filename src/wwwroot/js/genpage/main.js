@@ -749,7 +749,8 @@ function genpageLoad() {
     reviseStatusBar();
     loadHashHelper();
     getSession(() => {
-        imageHistoryBrowser.navigate('');
+        refreshImageGalleryBrowser();
+        getRequiredElementById('gallerytabbutton').addEventListener('click', () => refreshImageGalleryBrowser());
         initialModelListLoad();
         genericRequest('ListT2IParams', {}, data => {
             modelsHelpers.loadClassesFromServer(data.models, data.model_compat_classes, data.model_classes);

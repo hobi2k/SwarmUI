@@ -50,6 +50,9 @@ public class ComfyUser
     /// <summary>Map of Swarm-generated prompt IDs to actual backend comfy prompt IDs, where remapping has occurred.</summary>
     public ConcurrentDictionary<string, string> PromptIdMap = new();
 
+    /// <summary>현재 사용자가 소유한 prompt ID 집합이다.</summary>
+    public ConcurrentDictionary<string, byte> OwnedPromptIds = new();
+
     /// <summary>The user data socket.</summary>
     public WebSocket Socket;
 
@@ -68,6 +71,24 @@ public class ComfyUser
         {
             await client.Socket.SendAsync(FeatureFlagReport.ToString(Newtonsoft.Json.Formatting.None).EncodeUTF8(), WebSocketMessageType.Text, true, Program.GlobalProgramCancel);
         }
+    }
+
+    /// <summary>현재 사용자 소유 prompt ID를 등록한다.</summary>
+    /// <param name="promptId">등록할 prompt ID다.</param>
+    public void RegisterOwnedPromptId(string promptId)
+    {
+        if (!string.IsNullOrWhiteSpace(promptId))
+        {
+            OwnedPromptIds.TryAdd(promptId, 0);
+        }
+    }
+
+    /// <summary>주어진 prompt ID가 현재 사용자 소유인지 반환한다.</summary>
+    /// <param name="promptId">확인할 prompt ID다.</param>
+    /// <returns>현재 사용자 소유 prompt ID면 true를 반환한다.</returns>
+    public bool OwnsPromptId(string promptId)
+    {
+        return !string.IsNullOrWhiteSpace(promptId) && OwnedPromptIds.ContainsKey(promptId);
     }
 
     public void NewMessageToClient(Memory<byte> data, WebSocketMessageType type, bool endOfMessage)
@@ -195,6 +216,8 @@ public class ComfyUser
                     {
                         recvId ??= $"{promptIdTok}";
                         PromptIdMap.TryAdd($"{promptId}", recvId);
+                        RegisterOwnedPromptId($"{promptId}");
+                        RegisterOwnedPromptId(recvId);
                         if ($"{promptIdTok}" != recvId) // Shouldn't happen but check and skip to be safe
                         {
                             return;

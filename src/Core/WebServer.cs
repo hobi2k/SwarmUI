@@ -283,6 +283,7 @@ public class WebServer
         WebApp.Map("/API/{*Call}", API.HandleAsyncRequest);
         WebApp.MapGet("/Output/{*Path}", ViewOutput);
         WebApp.MapGet("/View/{*Path}", ViewOutput);
+        WebApp.MapGet("/OutputIndex/{EntryID}", ViewIndexedOutput);
         WebApp.MapGet("/ViewSpecial/{*Path}", ViewSpecial);
         WebApp.MapGet("/ExtensionFile/{*f}", ViewExtensionScript);
         WebApp.MapGet("/Audio/{*f}", ViewAudio);
@@ -569,6 +570,12 @@ public class WebServer
             await context.YieldJsonOutput(null, 400, Utilities.ErrorObj(userError, "bad_path"));
             return;
         }
+        if (!UserImageHistoryHelper.ValidatePathAccess(user, root, path, out string accessError))
+        {
+            Logs.Warning($"User {user.UserID} tried to view shared output path '{context.Request.Path}' without permission.");
+            await context.YieldJsonOutput(null, 400, Utilities.ErrorObj(accessError, "unauthorized"));
+            return;
+        }
         path = UserImageHistoryHelper.GetRealPathFor(user, path, root: root);
         byte[] data = null;
         string contentType = Utilities.GuessContentType(path);
@@ -609,6 +616,80 @@ public class WebServer
             else
             {
                 Logs.Error($"Failed to read output file '{path}': {ex.ReadableString()}");
+                await context.YieldJsonOutput(null, 500, Utilities.ErrorObj("Error reading file. If you are the server owner, check program console log.", "file_error"));
+            }
+            return;
+        }
+        context.Response.ContentType = contentType;
+        context.Response.StatusCode = 200;
+        context.Response.ContentLength = data.Length;
+        if (contentType.StartsWith("application/") || contentType.StartsWith("text/"))
+        {
+            context.Response.Headers.CacheControl = "private, max-age=2";
+        }
+        else
+        {
+            context.Response.Headers.CacheControl = $"private, max-age={Program.ServerSettings.Network.OutputCacheSeconds}";
+        }
+        await context.Response.Body.WriteAsync(data, Program.GlobalProgramCancel);
+        await context.Response.CompleteAsync();
+    }
+
+    /// <summary>인스턴스 로컬 결과 인덱스 항목을 내려주는 웹 라우트다.</summary>
+    public async Task ViewIndexedOutput(HttpContext context)
+    {
+        string entryId = Uri.UnescapeDataString(context.Request.Path.ToString().After("/OutputIndex/")).Trim('/');
+        User user = GetUserFor(context);
+        if (user is null)
+        {
+            await context.YieldJsonOutput(null, 400, Utilities.ErrorObj("invalid or unauthorized", "invalid_user"));
+            return;
+        }
+        UserOutputHistoryIndex.OutputEntry entry = UserOutputHistoryIndex.GetEntry(user, entryId);
+        if (entry is null || !UserOutputHistoryIndex.EntryExists(entry))
+        {
+            await context.YieldJsonOutput(null, 404, Utilities.ErrorObj("404, file not found.", "file_not_found"));
+            return;
+        }
+        string path = Path.GetFullPath(entry.LocalPath);
+        byte[] data = null;
+        string contentType = Utilities.GuessContentType(path);
+        try
+        {
+            if (context.Request.Query.TryGetValue("preview", out StringValues previewToken) && $"{previewToken}" == "true" && user.Settings.ImageHistoryUsePreviews)
+            {
+                OutputMetadataTracker.OutputPreviewEntry previewEntry = OutputMetadataTracker.GetOrCreatePreviewFor(path.Replace('\\', '/'));
+                if (previewEntry is not null)
+                {
+                    data = previewEntry.PreviewData;
+                    contentType = "image/jpg";
+                    if (previewEntry.SimplifiedData is not null)
+                    {
+                        contentType = "image/webp";
+                        if (!Program.ServerSettings.UI.AllowAnimatedPreviews || (context.Request.Query.TryGetValue("noanim", out StringValues noanimToken) && $"{noanimToken}" == "true"))
+                        {
+                            data = previewEntry.SimplifiedData;
+                            contentType = "image/jpg";
+                        }
+                    }
+                }
+            }
+            if (data is null && Session.StillSavingFiles.TryGetValue(path, out Task<byte[]> cacheData))
+            {
+                data = await cacheData;
+            }
+            data ??= await File.ReadAllBytesAsync(path);
+        }
+        catch (Exception ex)
+        {
+            if (ex is FileNotFoundException || ex is DirectoryNotFoundException || ex is PathTooLongException)
+            {
+                Logs.Verbose($"File-not-found error reading indexed output file '{path}': {ex.ReadableString()}");
+                await context.YieldJsonOutput(null, 404, Utilities.ErrorObj("404, file not found.", "file_not_found"));
+            }
+            else
+            {
+                Logs.Error($"Failed to read indexed output file '{path}': {ex.ReadableString()}");
                 await context.YieldJsonOutput(null, 500, Utilities.ErrorObj("Error reading file. If you are the server owner, check program console log.", "file_error"));
             }
             return;

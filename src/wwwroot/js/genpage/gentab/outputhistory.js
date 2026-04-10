@@ -6,13 +6,17 @@ function registerMediaButton(name, action, title = '', mediaTypes = null, isDefa
     registeredMediaButtons.push({ name, action, title, mediaTypes, isDefault, showInHistory, href, is_download });
 }
 
-function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
-    let sortBy = localStorage.getItem('image_history_sort_by') ?? 'Name';
-    let reverse = localStorage.getItem('image_history_sort_reverse') == 'true';
-    let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
-    let sortElem = document.getElementById('image_history_sort_by');
-    let sortReverseElem = document.getElementById('image_history_sort_reverse');
-    let allowAnimsElem = document.getElementById('image_history_allow_anims');
+function isIndexedHistorySrc(src) {
+    return src && (src.startsWith('OutputIndex/') || src.startsWith('/OutputIndex/'));
+}
+
+function readOutputBrowserSettings(storagePrefix, browser) {
+    let sortBy = localStorage.getItem(`${storagePrefix}_sort_by`) ?? 'Name';
+    let reverse = localStorage.getItem(`${storagePrefix}_sort_reverse`) == 'true';
+    let allowAnims = localStorage.getItem(`${storagePrefix}_allow_anims`) != 'false';
+    let sortElem = document.getElementById(`${storagePrefix}_sort_by`);
+    let sortReverseElem = document.getElementById(`${storagePrefix}_sort_reverse`);
+    let allowAnimsElem = document.getElementById(`${storagePrefix}_allow_anims`);
     let fix = null;
     if (sortElem) {
         sortBy = sortElem.value;
@@ -21,27 +25,32 @@ function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
     }
     else { // first call happens before headers are built atm
         fix = () => {
-            let sortElem = document.getElementById('image_history_sort_by');
-            let sortReverseElem = document.getElementById('image_history_sort_reverse');
-            let allowAnimsElem = document.getElementById('image_history_allow_anims');
+            let sortElem = document.getElementById(`${storagePrefix}_sort_by`);
+            let sortReverseElem = document.getElementById(`${storagePrefix}_sort_reverse`);
+            let allowAnimsElem = document.getElementById(`${storagePrefix}_allow_anims`);
             sortElem.value = sortBy;
             sortReverseElem.checked = reverse;
             sortElem.addEventListener('change', () => {
-                localStorage.setItem('image_history_sort_by', sortElem.value);
-                imageHistoryBrowser.lightRefresh();
+                localStorage.setItem(`${storagePrefix}_sort_by`, sortElem.value);
+                browser.lightRefresh();
             });
             sortReverseElem.addEventListener('change', () => {
-                localStorage.setItem('image_history_sort_reverse', sortReverseElem.checked);
-                imageHistoryBrowser.lightRefresh();
+                localStorage.setItem(`${storagePrefix}_sort_reverse`, sortReverseElem.checked);
+                browser.lightRefresh();
             });
             allowAnimsElem.addEventListener('change', () => {
-                localStorage.setItem('image_history_allow_anims', allowAnimsElem.checked);
-                imageHistoryBrowser.lightRefresh();
+                localStorage.setItem(`${storagePrefix}_allow_anims`, allowAnimsElem.checked);
+                browser.lightRefresh();
             });
         }
     }
+    return { sortBy, reverse, allowAnims, fix };
+}
+
+function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, storagePrefix, browser) {
+    let { sortBy, reverse, fix } = readOutputBrowserSettings(storagePrefix, browser);
     let prefix = path == '' ? '' : (path.endsWith('/') ? path : `${path}/`);
-    genericRequest('ListImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': reverse}, data => {
+    genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': reverse}, data => {
         let folders = data.folders.sort((a, b) => b.toLowerCase().localeCompare(a.toLowerCase()));
         function isPreSortFile(f) {
             return f.src == 'index.html'; // Grid index files
@@ -51,7 +60,16 @@ function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
         data.files = preFiles.concat(postFiles);
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            return { 'name': fullSrc, 'data': { 'src': `${getImageOutPrefix()}/${fullSrc}`, 'fullsrc': fullSrc, 'name': f.src, 'metadata': interpretMetadata(f.metadata) } };
+            return {
+                'name': fullSrc,
+                'data': {
+                    'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
+                    'fullsrc': fullSrc,
+                    'name': f.src,
+                    'metadata': interpretMetadata(f.metadata),
+                    'entry_id': f.entry_id ?? null
+                }
+            };
         });
         callback(folders, mapped);
         if (fix) {
@@ -60,11 +78,44 @@ function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
     });
 }
 
+function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
+    let prefix = path == '' ? '' : (path.endsWith('/') ? path : `${path}/`);
+    genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': 'Date', 'sortReverse': false}, data => {
+        let mapped = data.files.map(f => {
+            let fullSrc = `${prefix}${f.src}`;
+            return {
+                'name': fullSrc,
+                'data': {
+                    'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
+                    'fullsrc': fullSrc,
+                    'name': f.src,
+                    'metadata': interpretMetadata(f.metadata),
+                    'entry_id': f.entry_id ?? null
+                }
+            };
+        });
+        mapped.reverse();
+        callback(data.folders, mapped);
+    });
+}
+
+/**
+ * Gallery 브라우저 캐시를 비우고 루트부터 다시 읽는다.
+ */
+function refreshImageGalleryBrowser() {
+    if (typeof imageGalleryBrowser === 'undefined') {
+        return;
+    }
+    imageGalleryBrowser.lastListCache = null;
+    imageGalleryBrowser.navigate('');
+}
+
 function buttonsForImage(fullsrc, src, metadata) {
     let isDataImage = src.startsWith('data:');
+    let isIndexed = isIndexedHistorySrc(src);
     let mediaType = getMediaType(src);
-    buttons = [];
-    if (permissions.hasPermission('user_star_images') && !isDataImage) {
+    let buttons = [];
+    if (permissions.hasPermission('user_star_images') && !isDataImage && !isIndexed) {
         buttons.push({
             label: (metadata && JSON.parse(metadata).is_starred) ? 'Unstar' : 'Star',
             title: 'Star or unstar this image - starred images get moved to a separate folder and highlighted.',
@@ -83,6 +134,12 @@ function buttonsForImage(fullsrc, src, metadata) {
                 doNoticePopover('Copied!', 'notice-pop-green');
             }
         });
+        buttons.push({
+            label: 'Download Metadata',
+            title: `Downloads the raw metadata of this image as a JSON text file.`,
+            href: `data:application/json;charset=utf-8,${encodeURIComponent(metadata)}`,
+            is_download: true
+        });
     }
     if (!isDataImage) {
         buttons.push({
@@ -94,7 +151,7 @@ function buttonsForImage(fullsrc, src, metadata) {
             }
         });
     }
-    if (permissions.hasPermission('local_image_folder') && !isDataImage) {
+    if (permissions.hasPermission('local_image_folder') && !isDataImage && !isIndexed) {
         buttons.push({
             label: 'Open In Folder',
             title: 'Opens the folder containing this image in your local PC file explorer.',
@@ -109,7 +166,7 @@ function buttonsForImage(fullsrc, src, metadata) {
         href: escapeHtmlForUrl(src),
         is_download: true
     });
-    if (permissions.hasPermission('user_delete_image') && !isDataImage) {
+    if (permissions.hasPermission('user_delete_image') && !isDataImage && !isIndexed) {
         buttons.push({
             label: 'Delete',
             title: 'Deletes this image from the server.',
@@ -126,12 +183,12 @@ function buttonsForImage(fullsrc, src, metadata) {
                     if (e) {
                         e.remove();
                     }
-                    let historySection = getRequiredElementById('imagehistorybrowser-content');
-                    let div = historySection.querySelector(`.image-block[data-name="${fullsrc}"]`);
+                    let gallerySection = getRequiredElementById('imagegallerybrowser-content');
+                    let div = gallerySection.querySelector(`.image-block[data-name="${fullsrc}"]`);
                     if (div) {
                         div.remove();
                     }
-                    div = historySection.querySelector(`.image-block[data-name="${src}"]`);
+                    div = gallerySection.querySelector(`.image-block[data-name="${src}"]`);
                     if (div) {
                         div.remove();
                     }
@@ -161,7 +218,7 @@ function buttonsForImage(fullsrc, src, metadata) {
     return buttons;
 }
 
-function describeOutputFile(image) {
+function buildOutputFileDescription(image, storagePrefix) {
     let buttons = buttonsForImage(image.data.fullsrc, image.data.src, image.data.metadata);
     let parsedMeta = { is_starred: false };
     if (image.data.metadata) {
@@ -177,10 +234,10 @@ function describeOutputFile(image) {
     let formattedMetadata = formatMetadata(image.data.metadata);
     let description = image.data.name + "\n" + formattedMetadata;
     let name = image.data.name;
-    let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
+    let allowAnims = localStorage.getItem(`${storagePrefix}_allow_anims`) != 'false';
     let allowAnimToggle = allowAnims ? '' : '&noanim=true';
     let forceImage = null, forcePreview = null;
-    let extension = image.data.src.split('.').pop();
+    let extension = image.data.name.split('.').pop();
     if (extension == 'html') {
         forceImage = 'imgs/html.jpg';
         forcePreview = forceImage;
@@ -217,8 +274,23 @@ function selectOutputInHistory(image, div) {
     }
 }
 
-let imageHistoryBrowser = new GenPageBrowserClass('image_history', listOutputHistoryFolderAndFiles, 'imagehistorybrowser', 'Thumbnails', describeOutputFile, selectOutputInHistory,
-    `<label for="image_history_sort_by">Sort:</label> <select id="image_history_sort_by"><option>Name</option><option>Date</option></select> <input type="checkbox" id="image_history_sort_reverse"> <label for="image_history_sort_reverse">Reverse</label> &emsp; <input type="checkbox" id="image_history_allow_anims" checked autocomplete="off"> <label for="image_history_allow_anims">Allow Animation</label>`);
+let imageGalleryBrowser = new GenPageBrowserClass('image_gallery', listOutputGalleryFolderAndFiles, 'imagegallerybrowser', 'Big Cards', (image) => buildOutputFileDescription(image, 'image_gallery'), selectOutputInHistory, '');
+imageGalleryBrowser.showDisplayFormat = false;
+imageGalleryBrowser.showDepth = false;
+imageGalleryBrowser.showUpFolder = false;
+imageGalleryBrowser.showFilter = false;
+imageGalleryBrowser.builtEvent = () => {
+    if (imageGalleryBrowser.folderTreeDiv) {
+        imageGalleryBrowser.folderTreeDiv.style.display = 'none';
+    }
+    let splitter = document.getElementById(`${imageGalleryBrowser.id}-splitter`);
+    if (splitter) {
+        splitter.style.display = 'none';
+    }
+    if (imageGalleryBrowser.fullContentDiv) {
+        imageGalleryBrowser.fullContentDiv.style.width = '100%';
+    }
+};
 
 function storeImageToHistoryWithCurrentParams(img) {
     let data = getGenInput();
