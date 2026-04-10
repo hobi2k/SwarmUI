@@ -871,7 +871,13 @@ public class ComfyUIBackendExtension : Extension
         }
         await Task.WhenAll(tasks); // Intentional force order for Comfy folders to be before nodes
         tasks = [];
-        foreach (string folder in Directory.EnumerateDirectories($"{FilePath}DLNodes"))
+        string dlNodesPath = $"{FilePath}DLNodes";
+        if (!Directory.Exists(dlNodesPath))
+        {
+            Logs.Debug($"Check for updates skipped managed ComfyUI nodes because '{dlNodesPath}' does not exist.");
+            return;
+        }
+        foreach (string folder in Directory.EnumerateDirectories(dlNodesPath))
         {
             tasks.Add(Utilities.RunCheckedTask(async () =>
             {
@@ -908,7 +914,13 @@ public class ComfyUIBackendExtension : Extension
                 }));
             }
         }
-        foreach (string folder in Directory.EnumerateDirectories($"{FilePath}DLNodes"))
+        string dlNodesPath = $"{FilePath}DLNodes";
+        if (!Directory.Exists(dlNodesPath))
+        {
+            Logs.Debug($"Backend update skipped managed ComfyUI nodes because '{dlNodesPath}' does not exist.");
+            return;
+        }
+        foreach (string folder in Directory.EnumerateDirectories(dlNodesPath))
         {
             string nodeName = Path.GetFileName(folder);
             if (toUpdate.Contains($"Comfy Node: {nodeName}"))
