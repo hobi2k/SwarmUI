@@ -771,10 +771,10 @@ function toggleStar(path, rawSrc) {
             batchDiv.dataset.metadata = JSON.stringify({ ...(JSON.parse(batchDiv.dataset.metadata ?? '{}') ?? {}), is_starred: data.new_state });
             batchDiv.classList.toggle('image-block-starred', data.new_state);
         }
-        let historyDiv = getRequiredElementById('imagehistorybrowser-content').querySelector(`.image-block[data-src="${rawSrc}"]`);
-        if (historyDiv) {
-            historyDiv.dataset.metadata = JSON.stringify({ ...(JSON.parse(historyDiv.dataset.metadata ?? '{}') ?? {}), is_starred: data.new_state });
-            historyDiv.classList.toggle('image-block-starred', data.new_state);
+        let galleryDiv = getRequiredElementById('imagegallerybrowser-content').querySelector(`.image-block[data-src="${rawSrc}"]`);
+        if (galleryDiv) {
+            galleryDiv.dataset.metadata = JSON.stringify({ ...(JSON.parse(galleryDiv.dataset.metadata ?? '{}') ?? {}), is_starred: data.new_state });
+            galleryDiv.classList.toggle('image-block-starred', data.new_state);
         }
         if (imageFullView.isOpen() && imageFullView.currentSrc == rawSrc) {
             let oldMetadata = JSON.parse(imageFullView.currentMetadata);
@@ -1143,15 +1143,15 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
     }
     includeButton('Reuse Parameters', copy_current_image_params, '', 'Copies the parameters used to generate this image to the current generation settings');
     if (!isDataImage) {
-        includeButton('View In History', () => {
+        includeButton('View In Gallery', () => {
             let folder = imagePathClean;
             let lastSlash = folder.lastIndexOf('/');
             if (lastSlash != -1) {
                 folder = folder.substring(0, lastSlash);
             }
-            getRequiredElementById('imagehistorytabclickable').click();
-            imageHistoryBrowser.navigate(folder);
-        }, '', 'Jumps the History browser to where this file is at.');
+            getRequiredElementById('gallerytabbutton').click();
+            imageGalleryBrowser.navigate(folder);
+        }, '', 'Jumps the Gallery browser to where this file is at.');
     }
     for (let added of buttonsForImage(imagePathClean, src, metadata)) {
         if (added.label == 'Star' || added.label == 'Unstar') {
@@ -1196,16 +1196,16 @@ function highlightSelectedImage(src) {
             i.classList.toggle('image-block-current', i.dataset.src == src);
         }
     }
-    let historyContainer = document.getElementById('imagehistorybrowser-content');
-    if (historyContainer) {
+    let galleryContainer = document.getElementById('imagegallerybrowser-content');
+    if (galleryContainer) {
         let normalizedSrc = getImageFullSrc(src);
-        for (let i of historyContainer.getElementsByClassName('image-block')) {
-            // History browser images may have data-src (if clicked) or just data-name (if not clicked yet)
-            let historyImgSrc = i.dataset.src || i.dataset.name;
-            let normalizedHistorySrc = historyImgSrc ? getImageFullSrc(historyImgSrc) : null;
-            i.classList.toggle('image-block-current', normalizedHistorySrc && normalizedSrc == normalizedHistorySrc);
+        for (let i of galleryContainer.getElementsByClassName('image-block')) {
+            // Gallery browser images may have data-src (if clicked) or just data-name (if not clicked yet)
+            let galleryImgSrc = i.dataset.src || i.dataset.name;
+            let normalizedGallerySrc = galleryImgSrc ? getImageFullSrc(galleryImgSrc) : null;
+            i.classList.toggle('image-block-current', normalizedGallerySrc && normalizedSrc == normalizedGallerySrc);
         }
-        for (let i of historyContainer.getElementsByClassName('model-block')) {
+        for (let i of galleryContainer.getElementsByClassName('model-block')) {
             i.classList.toggle('model-selected', i.dataset.src == src);
         }
     }

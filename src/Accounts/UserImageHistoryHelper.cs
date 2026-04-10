@@ -15,6 +15,65 @@ public class UserImageHistoryHelper
     /// <para>Special folders cannot contain other special folders.</para></summary>
     public static ConcurrentDictionary<string, string> SharedSpecialFolders = [];
 
+    /// <summary>현재 사용자가 공용 special folder에 접근할 수 있는지 반환한다.</summary>
+    /// <param name="user">확인할 사용자다.</param>
+    /// <returns>공용 special folder 접근 권한이 있으면 true를 반환한다.</returns>
+    public static bool CanAccessSharedSpecialFolders(User user)
+    {
+        return user?.HasPermission(Permissions.ViewOthersOutputs) == true;
+    }
+
+    /// <summary>주어진 경로가 공용 special folder 별칭을 직접 가리키는지 확인한다.</summary>
+    /// <param name="root">사용자 출력 루트 절대 경로다.</param>
+    /// <param name="path">검사할 절대 경로다.</param>
+    /// <returns>공용 special folder 별칭이면 해당 별칭을 반환하고, 아니면 null을 반환한다.</returns>
+    public static string GetSharedSpecialFolderKeyForPath(string root, string path)
+    {
+        if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+        string folder = Path.GetRelativePath(root, path).Replace('\\', '/').TrimStart('/');
+        if (!folder.EndsWith('/'))
+        {
+            folder += '/';
+        }
+        if (folder == "./")
+        {
+            return null;
+        }
+        foreach (string exposedFolder in SharedSpecialFolders.Keys.OrderByDescending(x => x.Length))
+        {
+            if (folder.StartsWith(exposedFolder, StringComparison.Ordinal))
+            {
+                return exposedFolder;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>사용자 출력 브라우징 요청이 공용 special folder를 가리킬 때 접근 가능 여부를 검사한다.</summary>
+    /// <param name="user">현재 사용자다.</param>
+    /// <param name="root">사용자 출력 루트 절대 경로다.</param>
+    /// <param name="path">검사할 절대 경로다.</param>
+    /// <param name="error">접근이 거부된 경우 사용자용 오류 문구다.</param>
+    /// <returns>접근이 허용되면 true를 반환한다.</returns>
+    public static bool ValidatePathAccess(User user, string root, string path, out string error)
+    {
+        error = null;
+        string sharedKey = GetSharedSpecialFolderKeyForPath(root, path);
+        if (sharedKey is null)
+        {
+            return true;
+        }
+        if (CanAccessSharedSpecialFolders(user))
+        {
+            return true;
+        }
+        error = "You do not have permission to access shared output folders.";
+        return false;
+    }
+
     /// <summary>Adapts a user image history path to the actual file path. Often just returns <paramref name="path"/>, but may adapt for special folders.</summary>
     /// <param name="user">The relevant user.</param>
     /// <param name="path">The relevant image path that may need redirection.</param>
@@ -35,12 +94,15 @@ public class UserImageHistoryHelper
         {
             return path;
         }
-        foreach ((string exposedFolder, string realPath) in SharedSpecialFolders)
+        if (CanAccessSharedSpecialFolders(user))
         {
-            if (folder.StartsWith(exposedFolder))
+            foreach ((string exposedFolder, string realPath) in SharedSpecialFolders)
             {
-                string cleaned = folder[exposedFolder.Length..];
-                path = Path.GetFullPath(Path.Combine(realPath, cleaned));
+                if (folder.StartsWith(exposedFolder, StringComparison.Ordinal))
+                {
+                    string cleaned = folder[exposedFolder.Length..];
+                    path = Path.GetFullPath(Path.Combine(realPath, cleaned));
+                }
             }
         }
         path = path.Replace('\\', '/');

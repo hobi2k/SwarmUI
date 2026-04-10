@@ -1,18 +1,21 @@
 using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 using Newtonsoft.Json.Linq;
+using SwarmUI.Accounts;
 using SwarmUI.Backends;
 using SwarmUI.Core;
+using SwarmUI.Media;
+using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
-using System.Net;
-using SwarmUI.WebAPI;
-using SwarmUI.Accounts;
-using Microsoft.Extensions.Primitives;
 using System.Threading.Tasks;
+using System.Web;
+using SwarmUI.WebAPI;
 
 namespace SwarmUI.Builtin_ComfyUIBackend;
 
@@ -71,6 +74,208 @@ public class ComfyUIRedirectHelper
         }
         return LastObjectInfo;
     }, TimeSpan.FromMinutes(10));
+
+    /// <summary>현재 Swarm 사용자와 연결된 Comfy 사용자 목록을 반환한다.</summary>
+    /// <param name="swarmUser">확인할 Swarm 사용자다.</param>
+    /// <returns>같은 Swarm 사용자를 가리키는 Comfy 사용자 목록이다.</returns>
+    public static List<ComfyUser> GetComfyUsersForSwarmUser(User swarmUser)
+    {
+        if (swarmUser is null)
+        {
+            return [];
+        }
+        return [.. Users.Values.Where(u => u.SwarmUser?.UserID == swarmUser.UserID).Distinct()];
+    }
+
+    /// <summary>현재 Swarm 사용자 소유 prompt ID 집합을 반환한다.</summary>
+    /// <param name="swarmUser">확인할 Swarm 사용자다.</param>
+    /// <returns>현재 사용자 소유 prompt ID 집합이다.</returns>
+    public static HashSet<string> GetOwnedPromptIds(User swarmUser)
+    {
+        return [.. GetComfyUsersForSwarmUser(swarmUser).SelectMany(u => u.OwnedPromptIds.Keys)];
+    }
+
+    /// <summary>대상 prompt ID가 현재 사용자 소유인지 반환한다.</summary>
+    /// <param name="swarmUser">확인할 Swarm 사용자다.</param>
+    /// <param name="promptId">검사할 prompt ID다.</param>
+    /// <returns>현재 사용자 소유 prompt ID면 true를 반환한다.</returns>
+    public static bool IsOwnedPromptId(User swarmUser, string promptId)
+    {
+        return !string.IsNullOrWhiteSpace(promptId) && GetOwnedPromptIds(swarmUser).Contains(promptId);
+    }
+
+    /// <summary>Comfy websocket JSON 이벤트를 현재 사용자 prompt 기준으로 필터링할지 반환한다.</summary>
+    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <param name="parsed">검사할 websocket 메시지다.</param>
+    /// <returns>메시지를 현재 사용자에게 보여줘도 되면 true를 반환한다.</returns>
+    public static bool ShouldForwardComfyEvent(User swarmUser, JObject parsed)
+    {
+        if (parsed?["data"] is not JObject dataObj || !dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
+        {
+            return true;
+        }
+        return IsOwnedPromptId(swarmUser, promptIdTok.ToString());
+    }
+
+    /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
+    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <param name="queue">원본 queue 응답이다.</param>
+    /// <returns>필터링된 queue 응답이다.</returns>
+    public static JObject FilterQueueResponse(User swarmUser, JObject queue)
+    {
+        bool keepItem(JToken item)
+        {
+            if (item is JArray arr && arr.Count > 1)
+            {
+                return IsOwnedPromptId(swarmUser, arr[1]?.ToString());
+            }
+            if (item is JObject obj)
+            {
+                return IsOwnedPromptId(swarmUser, obj["prompt_id"]?.ToString());
+            }
+            return false;
+        }
+        JObject result = queue.DeepClone() as JObject ?? new JObject();
+        if (result["queue_running"] is JArray running)
+        {
+            result["queue_running"] = new JArray(running.Where(keepItem));
+        }
+        if (result["queue_pending"] is JArray pending)
+        {
+            result["queue_pending"] = new JArray(pending.Where(keepItem));
+        }
+        return result;
+    }
+
+    /// <summary>Comfy history 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
+    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <param name="history">원본 history 응답이다.</param>
+    /// <returns>필터링된 history 응답이다.</returns>
+    public static JObject FilterHistoryResponse(User swarmUser, JObject history)
+    {
+        JObject result = new();
+        foreach (JProperty property in history.Properties())
+        {
+            if (IsOwnedPromptId(swarmUser, property.Name))
+            {
+                result[property.Name] = property.Value;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Comfy history 결과를 현재 사용자 Gallery 인덱스에 동기화한다.</summary>
+    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <param name="webClient">현재 backend HTTP 클라이언트다.</param>
+    /// <param name="webAddress">현재 backend 웹 주소다.</param>
+    /// <param name="history">현재 사용자 기준으로 필터링된 history JSON이다.</param>
+    public static async Task SyncHistoryOutputsToUserGallery(User swarmUser, HttpClient webClient, string webAddress, JObject history)
+    {
+        if (swarmUser is null || webClient is null || string.IsNullOrWhiteSpace(webAddress) || history is null || !history.HasValues)
+        {
+            return;
+        }
+        Session session = swarmUser.GetGenericSession();
+        T2IParamInput saveInput = new(session);
+        saveInput.Set(T2IParamTypes.OverrideOutpathFormat, "comfy-workflow-[year]-[month]-[day]-[hour][minute][request_time_inc]-[number]");
+        foreach (JProperty historyEntry in history.Properties())
+        {
+            string promptId = historyEntry.Name;
+            if (historyEntry.Value is not JObject historyObj || historyObj["outputs"] is not JObject outputs)
+            {
+                continue;
+            }
+            int batchIndex = 0;
+            foreach (JToken outData in outputs.Values())
+            {
+                if (outData is null)
+                {
+                    continue;
+                }
+                async Task syncCollection(JArray collection, string collectionName)
+                {
+                    if (collection is null)
+                    {
+                        return;
+                    }
+                    foreach (JToken outImageTok in collection)
+                    {
+                        if (outImageTok is not JObject outImage || outImage["filename"] is null)
+                        {
+                            continue;
+                        }
+                        string filename = outImage["filename"]?.ToString();
+                        string subfolder = outImage["subfolder"]?.ToString() ?? "";
+                        string requestId = $"comfyhistory:{promptId}:{collectionName}:{subfolder}/{filename}";
+                        if (UserOutputHistoryIndex.HasRequest(swarmUser, requestId))
+                        {
+                            batchIndex++;
+                            continue;
+                        }
+                        string viewUrl = $"filename={HttpUtility.UrlEncode(filename)}&type={(($"{outImage["type"]}" == "temp") ? "temp" : "output")}";
+                        if (!string.IsNullOrWhiteSpace(subfolder))
+                        {
+                            viewUrl += $"&subfolder={HttpUtility.UrlEncode(subfolder)}";
+                        }
+                        byte[] raw = await (await webClient.GetAsync($"{webAddress}/view?{viewUrl}")).Content.ReadAsByteArrayAsync();
+                        if (raw is null || raw.Length == 0)
+                        {
+                            batchIndex++;
+                            continue;
+                        }
+                        string ext = filename.AfterLast('.');
+                        string format = outImage.TryGetValue("format", out JToken formatTok) ? formatTok.ToString() : null;
+                        MediaType type = MediaType.GetByExtension(ext) ?? MediaType.TypesByMimeType.GetValueOrDefault(format ?? "") ?? MediaType.ImagePng;
+                        MediaFile file = type.MetaType.CreateNew(raw, type);
+                        string metadata = new JObject()
+                        {
+                            ["source"] = "comfy_workflow",
+                            ["prompt_id"] = promptId,
+                            ["filename"] = filename,
+                            ["subfolder"] = subfolder,
+                            ["collection"] = collectionName
+                        }.ToString(Newtonsoft.Json.Formatting.None);
+                        T2IEngine.ImageOutput imageOutput = new() { File = file, IsReal = true };
+                        (string savedUrl, string localPath) = session.SaveImage(imageOutput, batchIndex, saveInput, metadata);
+                        if (savedUrl != "ERROR" && !string.IsNullOrWhiteSpace(localPath))
+                        {
+                            UserOutputHistoryIndex.RecordOutput(session, savedUrl, localPath, metadata, requestId, batchIndex);
+                        }
+                        batchIndex++;
+                    }
+                }
+                await syncCollection(outData["images"] as JArray, "images");
+                await syncCollection(outData["gifs"] as JArray, "gifs");
+                await syncCollection(outData["audio"] as JArray, "audio");
+            }
+        }
+    }
+
+    /// <summary>Comfy queue/history 삭제 요청 본문을 현재 사용자 소유 prompt 기준으로 정리한다.</summary>
+    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <param name="requestBody">원본 요청 본문 JSON이다.</param>
+    /// <returns>필터링된 요청 본문 JSON이다.</returns>
+    public static JObject FilterQueueMutationRequest(User swarmUser, JObject requestBody)
+    {
+        HashSet<string> ownedPromptIds = GetOwnedPromptIds(swarmUser);
+        JObject filtered = new();
+        if (requestBody.TryGetValue("delete", out JToken deleteTok) && deleteTok is JArray deleteArr)
+        {
+            JArray allowedDeletes = new(deleteArr.Where(id => ownedPromptIds.Contains(id?.ToString())));
+            if (allowedDeletes.Count > 0)
+            {
+                filtered["delete"] = allowedDeletes;
+            }
+        }
+        if (requestBody.TryGetValue("clear", out JToken clearTok) && clearTok.Type == JTokenType.Boolean && clearTok.Value<bool>())
+        {
+            if (ownedPromptIds.Count > 0)
+            {
+                filtered["delete"] = new JArray(ownedPromptIds);
+            }
+        }
+        return filtered;
+    }
 
     /// <summary>Main comfy redirection handler - the core handler for the '/ComfyBackendDirect' route.</summary>
     public static async Task ComfyBackendDirectHandler(HttpContext context)
@@ -232,6 +437,10 @@ public class ComfyUIRedirectHelper
                                                     client.QueueRemaining = queueRemTok.Value<int>();
                                                     dataObj["status"]["exec_info"]["queue_remaining"] = user.TotalQueue;
                                                 }
+                                                if (!ShouldForwardComfyEvent(swarmUser, parsed))
+                                                {
+                                                    continue;
+                                                }
                                                 toSend = Encoding.UTF8.GetBytes(parsed.ToString());
                                             }
                                         }
@@ -337,7 +546,8 @@ public class ComfyUIRedirectHelper
                     if (parsed.TryGetValue("client_id", out JToken clientIdTok))
                     {
                         string sid = clientIdTok.ToString();
-                        if (Users.TryGetValue(sid, out ComfyUser user))
+                        ComfyUser user = Users.GetValueOrDefault(sid) ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
+                        if (user is not null)
                         {
                             await user.Lock.WaitAsync();
                             try
@@ -347,12 +557,18 @@ public class ComfyUIRedirectHelper
                                 if (user.WantsQueuing)
                                 {
                                     (_, JObject responseJson) = user.SendPromptQueue(prompt);
+                                    user.RegisterOwnedPromptId(responseJson["prompt_id"]?.ToString());
                                     response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(responseJson) };
                                     redirected = true;
                                     Logs.Info($"Sent Comfy backend direct prompt requested to general queue (from user {swarmUser.UserID})");
                                 }
                                 else
                                 {
+                                    if (!parsed.TryGetValue("prompt_id", out JToken promptIdTok) || string.IsNullOrWhiteSpace(promptIdTok?.ToString()))
+                                    {
+                                        parsed["prompt_id"] = $"{Guid.NewGuid():N}";
+                                    }
+                                    user.RegisterOwnedPromptId(parsed["prompt_id"]?.ToString());
                                     ComfyClientData client = await user.SendPromptRegular(prompt, givePostError);
                                     if (client?.SID is not null)
                                     {
@@ -433,20 +649,57 @@ public class ComfyUIRedirectHelper
             }
             else if (path == "queue" || path == "api/queue") // eg queue delete
             {
-                List<Task<HttpResponseMessage>> tasks = [];
                 MemoryStream inputCopy = new();
                 await context.Request.Body.CopyToAsync(inputCopy);
-                byte[] inputBytes = inputCopy.ToArray();
-                foreach (ComfyUIBackendExtension.ComfyBackendData back in allBackends)
+                string inputText = Encoding.UTF8.GetString(inputCopy.ToArray());
+                JObject requestJson = string.IsNullOrWhiteSpace(inputText) ? new JObject() : inputText.ParseToJson();
+                JObject filteredRequest = FilterQueueMutationRequest(swarmUser, requestJson);
+                if (!filteredRequest.HasValues)
                 {
-                    HttpRequestMessage dupRequest = new(new HttpMethod("POST"), $"{back.WebAddress}/{path}") { Content = new ByteArrayContent(inputBytes) };
-                    dupRequest.Content.Headers.Add("Content-Type", context.Request.ContentType);
-                    tasks.Add(webClient.SendAsync(dupRequest));
+                    response = new HttpResponseMessage(HttpStatusCode.OK);
                 }
-                await Task.WhenAll(tasks);
-                List<HttpResponseMessage> responses = [.. tasks.Select(t => t.Result)];
-                response = responses.FirstOrDefault(t => t.StatusCode == HttpStatusCode.OK);
-                response ??= responses.FirstOrDefault();
+                else
+                {
+                    List<Task<HttpResponseMessage>> tasks = [];
+                    byte[] inputBytes = Encoding.UTF8.GetBytes(filteredRequest.ToString());
+                    foreach (ComfyUIBackendExtension.ComfyBackendData back in allBackends)
+                    {
+                        HttpRequestMessage dupRequest = new(new HttpMethod("POST"), $"{back.WebAddress}/{path}") { Content = new ByteArrayContent(inputBytes) };
+                        dupRequest.Content.Headers.Add("Content-Type", context.Request.ContentType ?? "application/json");
+                        tasks.Add(webClient.SendAsync(dupRequest));
+                    }
+                    await Task.WhenAll(tasks);
+                    List<HttpResponseMessage> responses = [.. tasks.Select(t => t.Result)];
+                    response = responses.FirstOrDefault(t => t.StatusCode == HttpStatusCode.OK);
+                    response ??= responses.FirstOrDefault();
+                }
+            }
+            else if (path == "history" || path == "api/history")
+            {
+                MemoryStream inputCopy = new();
+                await context.Request.Body.CopyToAsync(inputCopy);
+                string inputText = Encoding.UTF8.GetString(inputCopy.ToArray());
+                JObject requestJson = string.IsNullOrWhiteSpace(inputText) ? new JObject() : inputText.ParseToJson();
+                JObject filteredRequest = FilterQueueMutationRequest(swarmUser, requestJson);
+                if (!filteredRequest.HasValues)
+                {
+                    response = new HttpResponseMessage(HttpStatusCode.OK);
+                }
+                else
+                {
+                    List<Task<HttpResponseMessage>> tasks = [];
+                    byte[] inputBytes = Encoding.UTF8.GetBytes(filteredRequest.ToString());
+                    foreach (ComfyUIBackendExtension.ComfyBackendData back in allBackends)
+                    {
+                        HttpRequestMessage dupRequest = new(new HttpMethod("POST"), $"{back.WebAddress}/{path}") { Content = new ByteArrayContent(inputBytes) };
+                        dupRequest.Content.Headers.Add("Content-Type", context.Request.ContentType ?? "application/json");
+                        tasks.Add(webClient.SendAsync(dupRequest));
+                    }
+                    await Task.WhenAll(tasks);
+                    List<HttpResponseMessage> responses = [.. tasks.Select(t => t.Result)];
+                    response = responses.FirstOrDefault(t => t.StatusCode == HttpStatusCode.OK);
+                    response ??= responses.FirstOrDefault();
+                }
             }
             else
             {
@@ -464,7 +717,21 @@ public class ComfyUIRedirectHelper
         }
         else
         {
-            if (path.StartsWith("view?filename=") || path.StartsWith("api/view?filename=") || path.StartsWith("api/vhs/queryvideo?filename="))
+            if (path == "queue" || path.StartsWith("queue?") || path == "api/queue" || path.StartsWith("api/queue?"))
+            {
+                HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
+                JObject queue = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
+                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, queue)) };
+            }
+            else if (path == "history" || path.StartsWith("history?") || path == "api/history" || path.StartsWith("api/history?"))
+            {
+                HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
+                JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
+                JObject filteredHistory = FilterHistoryResponse(swarmUser, history);
+                await SyncHistoryOutputsToUserGallery(swarmUser, webClient, webAddress, filteredHistory);
+                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(filteredHistory) };
+            }
+            else if (path.StartsWith("view?filename=") || path.StartsWith("api/view?filename=") || path.StartsWith("api/vhs/queryvideo?filename="))
             {
                 List<Task<HttpResponseMessage>> requests = [];
                 foreach (ComfyUIBackendExtension.ComfyBackendData localBack in allBackends)
@@ -528,6 +795,21 @@ public class ComfyUIRedirectHelper
             if (response.Content.Headers.ContentType is not null)
             {
                 context.Response.ContentType = response.Content.Headers.ContentType.ToString();
+            }
+            if ((path == "prompt" || path == "api/prompt") && response.Content.Headers.ContentType?.MediaType == "application/json")
+            {
+                string responseText = await response.Content.ReadAsStringAsync();
+                JObject responseJson = responseText.ParseToJson();
+                if (context.Request.Method == "POST" && responseJson.TryGetValue("prompt_id", out JToken promptIdTok))
+                {
+                    foreach (ComfyUser user in GetComfyUsersForSwarmUser(swarmUser))
+                    {
+                        user.RegisterOwnedPromptId(promptIdTok.ToString());
+                    }
+                }
+                await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));
+                await context.Response.CompleteAsync();
+                return;
             }
             await response.Content.CopyToAsync(context.Response.Body);
         }

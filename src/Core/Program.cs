@@ -413,6 +413,18 @@ public class Program
             Logs.Warning($"Your folder path for SwarmUI contains a space. While Swarm itself can handle this fine, sometimes upstream dependencies misbehave around spaces. It is recommended you keep file paths very simple.");
         }
         Logs.Init($"SwarmUI v{Utilities.Version} - {ServerSettings.UserAuthorization.InstanceTitle} is now running.");
+        if (!ServerSettings.UserAuthorization.AuthorizationRequired)
+        {
+            Logs.Warning("User isolation requires UserAuthorization.AuthorizationRequired=true. With authorization disabled, workers do not have individual accounts.");
+        }
+        if (ServerSettings.UserAuthorization.AuthorizationRequired && ServerSettings.UserAuthorization.AllowLocalhostBypass)
+        {
+            Logs.Warning("User isolation is stronger when UserAuthorization.AllowLocalhostBypass=false. With localhost bypass enabled, a local connection can skip the login flow.");
+        }
+        if (!ServerSettings.Paths.AppendUserNameToOutputPath)
+        {
+            Logs.Warning("User isolation requires Paths.AppendUserNameToOutputPath=true. With per-user output paths disabled, generated outputs are stored in a shared root.");
+        }
         WebhookManager.SendWebhook("Startup", ServerSettings.WebHooks.ServerStartWebhook, ServerSettings.WebHooks.ServerShutdownWebhook);
         if (Environment.CurrentDirectory.Contains("StableSwarmUI"))
         {
@@ -739,17 +751,28 @@ public class Program
         {
             Logs.Warning($"Port {port} looks like a port commonly used by other programs. You may want to change it.");
         }
-        if (ServerSettings.Network.PortCanChange)
+        if (ServerSettings.Network.PortCanChange && !RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
             int origPort = port;
-            while (Utilities.IsPortTaken(port))
+            try
             {
-                port++;
+                while (Utilities.IsPortTaken(port))
+                {
+                    port++;
+                }
+            }
+            catch (OverflowException ex)
+            {
+                Logs.Warning($"포트 사용 여부 자동 확인 중 오류가 발생해 요청 포트 {port}를 그대로 사용합니다: {ex.Message}");
             }
             if (origPort != port)
             {
                 Logs.Init($"Port {origPort} was taken, using {port} instead.");
             }
+        }
+        else if (ServerSettings.Network.PortCanChange && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            Logs.Warning("macOS에서는 포트 자동 변경 검사를 건너뛰고 설정된 포트를 그대로 사용합니다.");
         }
         WebServer.SetHost(host, port);
         NetworkBackendUtils.NextPort = ServerSettings.Network.BackendStartingPort;

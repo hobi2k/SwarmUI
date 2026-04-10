@@ -52,6 +52,9 @@ public class SessionHandler
     /// <summary>Generic user data store.</summary>
     public ILiteCollection<GenericDataStore> GenericData;
 
+    /// <summary>인스턴스 로컬 결과 인덱스 저장소다.</summary>
+    public ILiteCollection<UserOutputHistoryIndex.OutputEntry> OutputHistoryEntries;
+
     /// <summary>Internal database (login sessions).</summary>
     public ILiteCollection<LoginSession> LoginSessions;
 
@@ -236,6 +239,7 @@ public class SessionHandler
         SessionDatabase = Database.GetCollection<Session.DatabaseEntry>("sessions");
         T2IPresets = Database.GetCollection<T2IPreset>("t2i_presets");
         GenericData = Database.GetCollection<GenericDataStore>("generic_data");
+        OutputHistoryEntries = Database.GetCollection<UserOutputHistoryIndex.OutputEntry>("output_history_entries");
         LoginSessions = Database.GetCollection<LoginSession>("login_sessions");
         UserOAuthLookupDB = Database.GetCollection<UserOAuthLookup>("user_oauth_lookup");
         FDSSection rolesData = new();
