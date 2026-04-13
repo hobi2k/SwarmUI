@@ -237,6 +237,22 @@ class ImageFullViewHelper {
         }
     }
 
+    onMediaLoadError(elem) {
+        if (!elem) {
+            return;
+        }
+        let fallbackSrc = elem.dataset?.fallbackSrc;
+        if (fallbackSrc && !elem.dataset?.usedFallback) {
+            elem.dataset.usedFallback = 'true';
+            elem.src = fallbackSrc;
+            return;
+        }
+        let wrap = this.content.querySelector('.imageview_modal_imagewrap');
+        if (wrap && !wrap.querySelector('.imageview_modal_load_error')) {
+            wrap.insertAdjacentHTML('beforeend', `<div class="imageview_modal_load_error">미리보기를 불러오지 못했습니다.</div>`);
+        }
+    }
+
     showImage(src, metadata, batchId = null) {
         this.didPasteState = false;
         this.currentSrc = src;
@@ -247,7 +263,10 @@ class ImageFullViewHelper {
         let isVideo = isVideoExt(src);
         let isAudio = isAudioExt(src);
         let encodedSrc = escapeHtmlForUrl(src);
-        let imgHtml = `<img class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" src="${encodedSrc}" onload="imageFullView.onImgLoad()">`;
+        let fallbackSrc = isIndexedHistorySrc(src) && !src.includes('preview=true') ? `${src}${src.includes('?') ? '&' : '?'}preview=true` : '';
+        let encodedFallbackSrc = escapeHtmlForUrl(fallbackSrc);
+        let fallbackAttr = encodedFallbackSrc ? ` data-fallback-src="${encodedFallbackSrc}"` : '';
+        let imgHtml = `<img class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" src="${encodedSrc}"${fallbackAttr} onload="imageFullView.onImgLoad()" onerror="imageFullView.onMediaLoadError(this)">`;
         if (isVideo) {
             imgHtml = `<div class="video-container imageview_popup_modal_img" id="imageview_popup_modal_img"><video class="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" autoplay loop muted onload="imageFullView.onImgLoad()"><source src="${encodedSrc}" type="${isVideo}"></video></div>`;
         }
