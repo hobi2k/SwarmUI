@@ -119,7 +119,7 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
         data.files = preFiles.concat(postFiles);
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            let actualSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
+            let actualSrc = normalizeGalleryItemSrc(f.web_url ?? f.url ?? `${getImageOutPrefix()}/${fullSrc}`);
             let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
             return {
                 'name': fullSrc,
@@ -149,7 +149,7 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
     genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': sortReverse}, data => {
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            let actualSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
+            let actualSrc = normalizeGalleryItemSrc(f.web_url ?? f.url ?? `${getImageOutPrefix()}/${fullSrc}`);
             let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
             return {
                 'name': fullSrc,

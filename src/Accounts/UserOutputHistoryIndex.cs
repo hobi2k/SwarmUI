@@ -212,13 +212,12 @@ public static class UserOutputHistoryIndex
         foreach (OutputEntry entry in entries)
         {
             string relativeDisplayPath = GetRelativeDisplayPath(entry.DisplayPath, normalizedPath);
-            string fileName = Path.GetFileName(entry.LocalPath);
             files.Add(new JObject()
             {
                 ["src"] = relativeDisplayPath,
                 ["metadata"] = string.IsNullOrWhiteSpace(entry.Metadata) ? null : entry.Metadata,
                 ["entry_id"] = entry.ID,
-                ["url"] = $"OutputIndex/{entry.ID}/{Uri.EscapeDataString(fileName)}",
+                ["url"] = $"OutputIndex/{entry.ID}",
                 ["web_url"] = entry.WebPath
             });
         }

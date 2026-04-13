@@ -288,7 +288,6 @@ public class WebServer
         WebApp.MapGet("/Output/{*Path}", ViewOutput);
         WebApp.MapGet("/View/{*Path}", ViewOutput);
         WebApp.MapGet("/OutputIndex/{EntryID}", ViewIndexedOutput);
-        WebApp.MapGet("/OutputIndex/{EntryID}/{*FileName}", ViewIndexedOutput);
         WebApp.MapGet("/ViewSpecial/{*Path}", ViewSpecial);
         WebApp.MapGet("/ExtensionFile/{*f}", ViewExtensionScript);
         WebApp.MapGet("/Audio/{*f}", ViewAudio);
@@ -643,8 +642,7 @@ public class WebServer
     /// <summary>인스턴스 로컬 결과 인덱스 항목을 내려주는 웹 라우트다.</summary>
     public async Task ViewIndexedOutput(HttpContext context)
     {
-        string routePath = Uri.UnescapeDataString(context.Request.Path.ToString().After("/OutputIndex/")).Trim('/');
-        string entryId = routePath.Before('/');
+        string entryId = Uri.UnescapeDataString(context.Request.Path.ToString().After("/OutputIndex/")).Trim('/');
         User user = GetUserFor(context);
         if (user is null)
         {
