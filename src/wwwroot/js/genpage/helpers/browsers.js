@@ -536,6 +536,15 @@ class GenPageBrowserClass {
                 div.addEventListener('mouseenter', () => div.title = stripHtmlToText(desc.description), { once: true });
             }
             div.dataset.name = file.name;
+            if (file?.data?.entry_id) {
+                div.dataset.entryId = file.data.entry_id;
+            }
+            if (file?.data?.src) {
+                div.dataset.src = file.data.src;
+            }
+            if (file?.data?.metadata) {
+                div.dataset.metadata = file.data.metadata;
+            }
             img.classList.add('lazyload');
             img.dataset.src = desc.image;
             if (desc.dragimage) {
