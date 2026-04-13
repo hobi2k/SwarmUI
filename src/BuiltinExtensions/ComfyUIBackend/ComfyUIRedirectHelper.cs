@@ -104,21 +104,18 @@ public class ComfyUIRedirectHelper
         return !string.IsNullOrWhiteSpace(promptId) && GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
-    /// <summary>Comfy websocket JSON 이벤트를 현재 사용자 prompt 기준으로 필터링할지 반환한다.</summary>
-    /// <param name="swarmUser">현재 Swarm 사용자다.</param>
+    /// <summary>Comfy websocket JSON 이벤트를 현재 ComfyUser 소유 prompt 기준으로 필터링할지 반환한다.</summary>
+    /// <param name="comfyUser">현재 브라우저 WebSocket 연결에 해당하는 ComfyUser다.</param>
     /// <param name="parsed">검사할 websocket 메시지다.</param>
     /// <returns>메시지를 현재 사용자에게 보여줘도 되면 true를 반환한다.</returns>
-    public static bool ShouldForwardComfyEvent(User swarmUser, JObject parsed)
+    public static bool ShouldForwardComfyEvent(ComfyUser comfyUser, JObject parsed)
     {
         if (parsed?["data"] is not JObject dataObj || !dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
         {
             return true;
         }
         string promptId = promptIdTok.ToString();
-        HashSet<string> owned = GetOwnedPromptIds(swarmUser);
-        bool result = owned.Contains(promptId);
-        Logs.Info($"[ComfyFilter] type={parsed["type"]} prompt_id={promptId} user={swarmUser?.UserID} owned_count={owned.Count} result={result}");
-        return result;
+        return comfyUser.OwnsPromptId(promptId);
     }
 
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
@@ -419,17 +416,7 @@ public class ComfyUIRedirectHelper
                                                 {
                                                     client.LastNode = nodeTok.ToString();
                                                 }
-                                                if (dataObj.TryGetValue("status", out JToken statusTok) && statusTok is JObject status
-                                                    && status.TryGetValue("exec_info", out JToken execTok) && execTok is JObject exec
-                                                    && exec.TryGetValue("queue_remaining", out JToken queueRemTok))
-                                                {
-                                                    // client.QueueRemaining은 이 사용자 소유 작업 수만 반영해야 한다.
-                                                    // ComfyUI의 queue_remaining은 전체 큐 수이므로 직접 사용하지 않는다.
-                                                    int ownedCount = GetOwnedPromptIds(swarmUser).Count;
-                                                    client.QueueRemaining = ownedCount;
-                                                    dataObj["status"]["exec_info"]["queue_remaining"] = ownedCount;
-                                                }
-                                                if (!ShouldForwardComfyEvent(swarmUser, parsed))
+                                                if (!ShouldForwardComfyEvent(user, parsed))
                                                 {
                                                     continue;
                                                 }
@@ -520,6 +507,7 @@ public class ComfyUIRedirectHelper
             return;
         }
         HttpResponseMessage response = null;
+        ComfyUser promptComfyUser = null; // /prompt 요청을 제출한 ComfyUser를 추적한다.
         if (context.Request.Method == "POST")
         {
             if (!swarmUser.HasPermission(ComfyUIBackendExtension.PermBackendGenerate))
@@ -552,6 +540,7 @@ public class ComfyUIRedirectHelper
                     {
                         string sid = clientIdTok.ToString();
                         ComfyUser user = Users.GetValueOrDefault(sid) ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
+                        promptComfyUser = user;
                         if (user is not null)
                         {
                             await user.Lock.WaitAsync();
@@ -809,13 +798,9 @@ public class ComfyUIRedirectHelper
                 if (context.Request.Method == "POST" && responseJson.TryGetValue("prompt_id", out JToken promptIdTok))
                 {
                     string pid = promptIdTok.ToString();
-                    List<ComfyUser> comfyUsers = GetComfyUsersForSwarmUser(swarmUser);
-                    Logs.Info($"[ComfyFilter] prompt 등록: prompt_id={pid} user={swarmUser?.UserID} comfyUserCount={comfyUsers.Count}");
-                    foreach (ComfyUser user in comfyUsers)
-                    {
-                        user.RegisterOwnedPromptId(pid);
-                        Logs.Info($"[ComfyFilter] → ComfyUser에 등록 완료: SID={user.MasterSID}");
-                    }
+                    // promptComfyUser는 위 /prompt 처리 블록에서 설정된다. 없으면 첫 번째 ComfyUser로 폴백한다.
+                    ComfyUser targetComfyUser = promptComfyUser ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
+                    targetComfyUser?.RegisterOwnedPromptId(pid);
                 }
                 await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));
                 await context.Response.CompleteAsync();
