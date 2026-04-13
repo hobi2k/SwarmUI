@@ -19,15 +19,8 @@ class ImageFullViewHelper {
             }
             this.noClose = false;
         }, true);
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.isOpen()) {
-                this.close(true);
-                e.preventDefault();
-                e.stopPropagation();
-            }
-        }, true);
         this.modalJq.on('hidden.bs.modal', () => {
-            this.close(false);
+            this.close();
         });
         this.lastMouseX = 0;
         this.lastMouseY = 0;
@@ -349,24 +342,9 @@ class ImageFullViewHelper {
         }
     }
 
-    forceCloseDomState() {
-        this.modal.classList.remove('show');
-        this.modal.style.display = 'none';
-        this.modal.setAttribute('aria-hidden', 'true');
-        document.body.classList.remove('modal-open');
-        document.body.style.removeProperty('padding-right');
-        for (let backdrop of document.querySelectorAll('.modal-backdrop')) {
-            backdrop.remove();
-        }
-    }
-
-    close(force = false) {
-        if (this.isOpen() && !force) {
+    close() {
+        if (this.isOpen()) {
             this.modalJq.modal('hide');
-            this.lastClosed = Date.now();
-        }
-        else {
-            this.forceCloseDomState();
             this.lastClosed = Date.now();
         }
         this.isDragging = false;
