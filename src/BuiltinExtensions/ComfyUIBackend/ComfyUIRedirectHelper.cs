@@ -22,6 +22,9 @@ namespace SwarmUI.Builtin_ComfyUIBackend;
 /// <summary>Helper class for network redirections for the '/ComfyBackendDirect' url path.</summary>
 public class ComfyUIRedirectHelper
 {
+    /// <summary>이 SwarmUI 인스턴스의 고유 식별자. 시작 시 생성되며 prompt_id prefix로 사용한다.</summary>
+    public static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
+
     /// <summary>Map of all currently connected users.</summary>
     public static ConcurrentDictionary<string, ComfyUser> Users = new();
 
@@ -101,7 +104,11 @@ public class ComfyUIRedirectHelper
     /// <returns>현재 사용자 소유 prompt ID면 true를 반환한다.</returns>
     public static bool IsOwnedPromptId(User swarmUser, string promptId)
     {
-        return !string.IsNullOrWhiteSpace(promptId) && GetOwnedPromptIds(swarmUser).Contains(promptId);
+        if (string.IsNullOrWhiteSpace(promptId)) return false;
+        // 이 인스턴스가 발행한 prompt_id는 prefix로 즉시 확인한다.
+        if (promptId.StartsWith($"swarm-{InstanceId}-")) return true;
+        // queuing 경로 등 prefix 없는 ID는 OwnedPromptIds로 확인한다.
+        return GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
     /// <summary>Comfy websocket JSON 이벤트를 현재 ComfyUser 소유 prompt 기준으로 필터링할지 반환한다.</summary>
@@ -115,8 +122,9 @@ public class ComfyUIRedirectHelper
             return true;
         }
         string promptId = promptIdTok.ToString();
-        bool result = comfyUser.OwnsPromptId(promptId);
-        Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} owned={comfyUser.OwnedPromptIds.Count} result={result}");
+        // 이 인스턴스가 발행한 prompt_id는 prefix로 즉시 확인한다.
+        bool result = promptId.StartsWith($"swarm-{InstanceId}-") || comfyUser.OwnsPromptId(promptId);
+        Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} result={result}");
         return result;
     }
 
@@ -139,6 +147,8 @@ public class ComfyUIRedirectHelper
             return false;
         }
         JObject result = queue.DeepClone() as JObject ?? new JObject();
+        int rawRunning = (result["queue_running"] as JArray)?.Count ?? 0;
+        int rawPending = (result["queue_pending"] as JArray)?.Count ?? 0;
         if (result["queue_running"] is JArray running)
         {
             result["queue_running"] = new JArray(running.Where(keepItem));
@@ -147,6 +157,9 @@ public class ComfyUIRedirectHelper
         {
             result["queue_pending"] = new JArray(pending.Where(keepItem));
         }
+        int filtRunning = (result["queue_running"] as JArray)?.Count ?? 0;
+        int filtPending = (result["queue_pending"] as JArray)?.Count ?? 0;
+        Logs.Debug($"[QFilter] FilterQueueResponse: raw=({rawRunning}+{rawPending}) filtered=({filtRunning}+{filtPending}) instanceId={InstanceId}");
         return result;
     }
 
@@ -164,6 +177,7 @@ public class ComfyUIRedirectHelper
                 result[property.Name] = property.Value;
             }
         }
+        Logs.Debug($"[QFilter] FilterHistoryResponse: raw={history.Count} filtered={result.Count} instanceId={InstanceId}");
         return result;
     }
 
@@ -424,7 +438,16 @@ public class ComfyUIRedirectHelper
                                                 }
                                                 // 소유권 검사 통과한 이벤트만 LastExecuting/LastProgress에 저장
                                                 string type = parsed["type"]?.ToString();
-                                                if (type == "executing")
+                                                if (type == "status")
+                                                {
+                                                    // ComfyUI의 실제 queue_remaining으로 QueueRemaining을 동기화한다.
+                                                    int queueRemaining = dataObj["status"]?["exec_info"]?["queue_remaining"]?.Value<int>() ?? -1;
+                                                    if (queueRemaining >= 0)
+                                                    {
+                                                        client.QueueRemaining = queueRemaining;
+                                                    }
+                                                }
+                                                else if (type == "executing")
                                                 {
                                                     // node=null이면 이 prompt 실행 완료 → LastExecuting 초기화
                                                     JToken nodeTokExec = parsed["data"]?["node"];
@@ -577,11 +600,11 @@ public class ComfyUIRedirectHelper
                                 }
                                 else
                                 {
-                                    if (!parsed.TryGetValue("prompt_id", out JToken promptIdTok) || string.IsNullOrWhiteSpace(promptIdTok?.ToString()))
-                                    {
-                                        parsed["prompt_id"] = $"{Guid.NewGuid():N}";
-                                    }
-                                    user.RegisterOwnedPromptId(parsed["prompt_id"]?.ToString());
+                                    // 브라우저가 보낸 prompt_id와 관계없이 이 인스턴스의 prefix를 붙인 ID로 교체한다.
+                                    // 이렇게 하면 WS 이벤트 필터링이 prefix 확인만으로 완전히 동작한다.
+                                    string instancePrefixedId = $"swarm-{InstanceId}-{Guid.NewGuid():N}";
+                                    parsed["prompt_id"] = instancePrefixedId;
+                                    user.RegisterOwnedPromptId(instancePrefixedId);
                                     ComfyClientData client = await user.SendPromptRegular(prompt, givePostError);
                                     if (client?.SID is not null)
                                     {
