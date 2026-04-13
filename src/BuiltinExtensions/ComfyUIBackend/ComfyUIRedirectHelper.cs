@@ -286,8 +286,13 @@ public class ComfyUIRedirectHelper
             {
                 continue;
             }
+            JToken finalOutput = outputs.Properties().LastOrDefault(p => p.Value is not null)?.Value;
+            if (finalOutput is null)
+            {
+                continue;
+            }
             int batchIndex = 0;
-            foreach (JToken outData in outputs.Values())
+            foreach (JToken outData in new[] { finalOutput })
             {
                 if (outData is null)
                 {
