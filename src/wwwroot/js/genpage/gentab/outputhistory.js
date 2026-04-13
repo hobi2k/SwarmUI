@@ -494,13 +494,8 @@ function selectOutputInHistory(image, div) {
     lastHistoryImage = image.data.src;
     lastHistoryImageDiv = div;
     if (div?.closest('#imagegallerybrowser-content')) {
-        let visibleMediaElem = div.querySelector('.image-block-img-inner');
-        if (visibleMediaElem) {
-            imageFullView.showExistingElement(visibleMediaElem, image.data.src, image.data.metadata, 'history');
-        }
-        else {
-            imageFullView.showImage(image.data.src, image.data.metadata, 'history', image.data.preview_src || image.data.src);
-        }
+        let visiblePreviewSrc = div.querySelector('.image-block-img-inner')?.src || image.data.preview_src || image.data.src;
+        imageFullView.showImage(image.data.src, image.data.metadata, 'history', visiblePreviewSrc);
         return;
     }
     let curImg = currentImageHelper.getCurrentImage();
