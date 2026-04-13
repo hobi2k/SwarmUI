@@ -458,12 +458,6 @@ class GenPageBrowserClass {
             });
             img.classList.add('image-block-img-inner');
             div.appendChild(img);
-            div.addEventListener('click', (e) => {
-                if (e.target.closest('.model-block-menu-button') || e.target.closest('.gallery-select-checkbox') || e.target.closest('.sui-popover')) {
-                    return;
-                }
-                this.select(file, div);
-            });
             if (this.format.includes('Cards')) {
                 div.className += ' model-block model-block-hoverable';
                 if (this.format.startsWith('Small')) { div.classList.add('model-block-small'); }
@@ -471,9 +465,6 @@ class GenPageBrowserClass {
                 let textBlock = createDiv(null, 'model-descblock');
                 textBlock.tabIndex = 0;
                 textBlock.innerHTML = desc.description;
-                textBlock.addEventListener('click', () => {
-                    this.select(file, div);
-                });
                 div.appendChild(textBlock);
             }
             else if (this.format.includes('Thumbnails')) {
@@ -536,8 +527,7 @@ class GenPageBrowserClass {
             if (desc.buttons.length > 0) {
                 let menu = createDiv(null, 'model-block-menu-button');
                 menu.innerHTML = '&#x2630;';
-                menu.addEventListener('click', (e) => {
-                    e.stopPropagation();
+                menu.addEventListener('click', () => {
                     doPopover(popoverId);
                 });
                 div.appendChild(menu);
