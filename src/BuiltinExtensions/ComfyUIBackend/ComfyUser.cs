@@ -367,6 +367,9 @@ public class ComfyClientData
 
     public volatile JObject LastExecuting, LastProgress;
 
+    /// <summary>현재 backend connection에서 이 사용자에게 속한 실행 중 prompt ID다.</summary>
+    public string ActivePromptId;
+
     public string Address;
 
     public AbstractT2IBackend Backend;

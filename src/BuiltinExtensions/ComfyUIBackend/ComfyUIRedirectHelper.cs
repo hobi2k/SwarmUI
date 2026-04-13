@@ -143,6 +143,38 @@ public class ComfyUIRedirectHelper
         return true;
     }
 
+    /// <summary>현재 backend 메시지 기준으로 사용자 소유 prompt ID를 추적하고 per-user queue 카운터를 갱신한다.</summary>
+    /// <param name="client">현재 backend 연결 데이터다.</param>
+    /// <param name="parsed">처리할 websocket 메시지다.</param>
+    public static void UpdateOwnedPromptTracking(ComfyClientData client, JObject parsed)
+    {
+        string type = parsed?["type"]?.ToString();
+        JObject dataObj = parsed?["data"] as JObject;
+        string promptId = dataObj?["prompt_id"]?.ToString();
+        if (!string.IsNullOrWhiteSpace(promptId))
+        {
+            client.ActivePromptId = promptId;
+        }
+        if (type == "executing" && dataObj?["node"]?.Type == JTokenType.Null && !string.IsNullOrWhiteSpace(client.ActivePromptId))
+        {
+            client.QueueRemaining = Math.Max(0, client.QueueRemaining - 1);
+            client.ActivePromptId = null;
+            client.LastExecuting = null;
+            client.LastProgress = null;
+            return;
+        }
+        if (type == "execution_error" || type == "execution_interrupted")
+        {
+            if (!string.IsNullOrWhiteSpace(promptId) && promptId == client.ActivePromptId)
+            {
+                client.ActivePromptId = null;
+            }
+            client.QueueRemaining = Math.Max(0, client.QueueRemaining - 1);
+            client.LastExecuting = null;
+            client.LastProgress = null;
+        }
+    }
+
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
     /// <param name="swarmUser">현재 Swarm 사용자다.</param>
     /// <param name="queue">원본 queue 응답이다.</param>
@@ -418,20 +450,7 @@ public class ComfyUIRedirectHelper
                                             rawText = StringConversionHelper.UTF8Encoding.GetString(recvBuf[0..received.Count]);
                                             JObject parsed = rawText.ParseToJson();
                                             JToken typeTok = parsed["type"];
-                                            if (typeTok is not null)
-                                            {
-                                                string type = typeTok.ToString();
-                                                if (type == "executing")
-                                                {
-                                                    client.LastExecuting = parsed;
-                                                    user.LastExecuting = parsed;
-                                                }
-                                                else if (type == "progress")
-                                                {
-                                                    client.LastProgress = parsed;
-                                                    user.LastProgress = parsed;
-                                                }
-                                            }
+                                            string type = typeTok?.ToString();
                                             JToken dataTok = parsed["data"];
                                             if (dataTok is JObject dataObj)
                                             {
@@ -460,12 +479,27 @@ public class ComfyUIRedirectHelper
                                                     && status.TryGetValue("exec_info", out JToken execTok) && execTok is JObject exec
                                                     && exec.TryGetValue("queue_remaining", out JToken queueRemTok))
                                                 {
-                                                    client.QueueRemaining = queueRemTok.Value<int>();
                                                     dataObj["status"]["exec_info"]["queue_remaining"] = user.TotalQueue;
                                                 }
-                                                if (!ShouldForwardComfyEvent(swarmUser, parsed))
+                                                bool shouldForward = ShouldForwardComfyEvent(swarmUser, parsed);
+                                                if (type == "executing" && dataObj["node"]?.Type == JTokenType.Null && !dataObj.ContainsKey("prompt_id"))
+                                                {
+                                                    shouldForward = !string.IsNullOrWhiteSpace(client.ActivePromptId);
+                                                }
+                                                if (!shouldForward)
                                                 {
                                                     continue;
+                                                }
+                                                UpdateOwnedPromptTracking(client, parsed);
+                                                if (type == "executing")
+                                                {
+                                                    client.LastExecuting = parsed;
+                                                    user.LastExecuting = parsed;
+                                                }
+                                                else if (type == "progress")
+                                                {
+                                                    client.LastProgress = parsed;
+                                                    user.LastProgress = parsed;
                                                 }
                                                 toSend = Encoding.UTF8.GetBytes(parsed.ToString());
                                             }
@@ -477,6 +511,10 @@ public class ComfyUIRedirectHelper
                                     }
                                     else
                                     {
+                                        if (string.IsNullOrWhiteSpace(client.ActivePromptId))
+                                        {
+                                            continue;
+                                        }
                                         if (client.LastExecuting is not null && (client.LastExecuting != user.LastExecuting || client.LastProgress != user.LastProgress))
                                         {
                                             user.LastExecuting = client.LastExecuting;
