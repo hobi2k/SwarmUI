@@ -69,6 +69,13 @@ function normalizeGalleryItemSrc(src) {
     return src;
 }
 
+function withIndexedPreviewQuery(src) {
+    if (!src || !isIndexedHistorySrc(src) || src.includes('preview=')) {
+        return src;
+    }
+    return `${src}${src.includes('?') ? '&' : '?'}preview=true`;
+}
+
 function readOutputBrowserSettings(storagePrefix, browser) {
     let sortBy = localStorage.getItem(`${storagePrefix}_sort_by`) ?? 'Name';
     let reverse = localStorage.getItem(`${storagePrefix}_sort_reverse`) == 'true';
@@ -120,7 +127,7 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
             let actualSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
-            let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
+            let previewSrc = withIndexedPreviewQuery(normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`));
             return {
                 'name': fullSrc,
                 'data': {
@@ -150,7 +157,7 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
             let actualSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
-            let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
+            let previewSrc = withIndexedPreviewQuery(normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`));
             return {
                 'name': fullSrc,
                 'data': {
