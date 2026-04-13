@@ -260,6 +260,68 @@ class ImageFullViewHelper {
         }
     }
 
+    showExistingElement(elem, src, metadata, batchId = null) {
+        this.didPasteState = false;
+        this.currentSrc = src;
+        this.currentMetadata = metadata;
+        this.currentBatchId = batchId;
+        this.updateCounter();
+        let wasAlreadyOpen = this.isOpen();
+        let cloned = elem.cloneNode(true);
+        cloned.id = 'imageview_popup_modal_img';
+        cloned.classList.add('imageview_popup_modal_img');
+        cloned.style.cursor = 'grab';
+        cloned.style.maxWidth = '100%';
+        cloned.style.objectFit = 'contain';
+        if (cloned.tagName === 'IMG') {
+            cloned.removeAttribute('loading');
+            cloned.removeAttribute('srcset');
+            cloned.src = elem.currentSrc || elem.src;
+        }
+        this.content.innerHTML = `
+        <div class="modal-dialog" style="display:none">(click outside image to close)</div>
+        <div class="imageview_modal_inner_div">
+            <div class="imageview_modal_imagewrap" id="imageview_modal_imagewrap" style="text-align:center;"></div>
+            <div class="imageview_popup_modal_undertext">
+                <div class="image_fullview_extra_buttons"></div>
+                <div class="image_fullview_metadata">${formatMetadata(metadata)}</div>
+            </div>
+        </div>`;
+        this.content.querySelector('#imageview_modal_imagewrap').appendChild(cloned);
+        let subDiv = this.content.querySelector('.image_fullview_extra_buttons');
+        for (let added of buttonsForImage(getImageFullSrc(src), src, metadata)) {
+            if (added.href) {
+                if (added.is_download) {
+                    subDiv.appendChild(createDiv(null, 'inline-block', `<a class="text_button basic-button translate" href="${added.href}" title="${added.title}" download>${added.label}</a>`));
+                }
+                else {
+                    subDiv.appendChild(createDiv(null, 'inline-block', `<a class="text_button basic-button translate" href="${added.href}" title="${added.title}">${added.label}</a>`));
+                }
+            }
+            else {
+                quickAppendButton(subDiv, added.label, (e, button) => added.onclick(button), added.className || '', added.title);
+            }
+        }
+        if (getUserSetting('ui.defaulthidemetadatainfullview')) {
+            this.getImgOrContainer().style.height = '100.2%';
+            this.toggleMetadataVisibility(false);
+        }
+        else {
+            this.toggleMetadataVisibility(true);
+        }
+        this.modalJq.modal('show');
+        this.onImgLoad();
+        if (Date.now() - this.lastClosed > 200 && !wasAlreadyOpen) {
+            subDiv.style.pointerEvents = 'none';
+            this.fixButtonDelay = setTimeout(() => {
+                if (subDiv && subDiv.parentElement) {
+                    subDiv.style.pointerEvents = 'auto';
+                }
+                this.fixButtonDelay = null;
+            }, 500);
+        }
+    }
+
     showImage(src, metadata, batchId = null, displaySrc = null) {
         this.didPasteState = false;
         this.currentSrc = src;
