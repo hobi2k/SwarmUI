@@ -141,6 +141,7 @@ public class ComfyUIRedirectHelper
     public static bool IsOwnedPromptId(User swarmUser, string promptId)
     {
         if (string.IsNullOrWhiteSpace(promptId)) return false;
+        if (promptId.StartsWith($"swarm-{InstanceId}-")) return true;
         return GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
@@ -164,7 +165,7 @@ public class ComfyUIRedirectHelper
             return true;
         }
         string promptId = promptIdTok.ToString();
-        bool result = comfyUser.OwnsPromptId(promptId);
+        bool result = promptId.StartsWith($"swarm-{InstanceId}-") || comfyUser.OwnsPromptId(promptId);
         Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} result={result}");
         return result;
     }
@@ -274,8 +275,10 @@ public class ComfyUIRedirectHelper
     {
         if (swarmUser is null || webClient is null || string.IsNullOrWhiteSpace(webAddress) || history is null || !history.HasValues)
         {
+            Logs.Debug($"[ComfyGallerySync] skip-empty user={(swarmUser?.UserID ?? "null")} history_count={(history?.Count ?? 0)}");
             return;
         }
+        Logs.Debug($"[ComfyGallerySync] begin user={swarmUser.UserID} history_count={history.Count}");
         Session session = swarmUser.GetGenericSession();
         T2IParamInput saveInput = new(session);
         saveInput.Set(T2IParamTypes.OverrideOutpathFormat, "comfy-workflow-[year]-[month]-[day]-[hour][minute][request_time_inc]-[number]");
@@ -284,11 +287,13 @@ public class ComfyUIRedirectHelper
             string promptId = historyEntry.Name;
             if (historyEntry.Value is not JObject historyObj || historyObj["outputs"] is not JObject outputs)
             {
+                Logs.Debug($"[ComfyGallerySync] prompt={promptId} skip-no-outputs");
                 continue;
             }
             JToken finalOutput = outputs.Properties().LastOrDefault(p => p.Value is not null)?.Value;
             if (finalOutput is null)
             {
+                Logs.Debug($"[ComfyGallerySync] prompt={promptId} skip-no-final-output");
                 continue;
             }
             int batchIndex = 0;
@@ -296,63 +301,84 @@ public class ComfyUIRedirectHelper
             {
                 if (outData is null)
                 {
+                    Logs.Debug($"[ComfyGallerySync] prompt={promptId} skip-null-outdata");
                     continue;
                 }
-                async Task syncCollection(JArray collection, string collectionName)
+                async Task syncSingleMedia(JObject outImage, string collectionName)
                 {
-                    if (collection is null)
+                    if (outImage is null || outImage["filename"] is null)
                     {
+                        Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} skip-null-media");
                         return;
                     }
-                    foreach (JToken outImageTok in collection)
+                    string filename = outImage["filename"]?.ToString();
+                    string subfolder = outImage["subfolder"]?.ToString() ?? "";
+                    string requestId = $"comfyhistory:{promptId}:{collectionName}:{subfolder}/{filename}";
+                    if (UserOutputHistoryIndex.HasRequest(swarmUser, requestId))
                     {
-                        if (outImageTok is not JObject outImage || outImage["filename"] is null)
-                        {
-                            continue;
-                        }
-                        string filename = outImage["filename"]?.ToString();
-                        string subfolder = outImage["subfolder"]?.ToString() ?? "";
-                        string requestId = $"comfyhistory:{promptId}:{collectionName}:{subfolder}/{filename}";
-                        if (UserOutputHistoryIndex.HasRequest(swarmUser, requestId))
-                        {
-                            batchIndex++;
-                            continue;
-                        }
-                        string viewUrl = $"filename={HttpUtility.UrlEncode(filename)}&type={(($"{outImage["type"]}" == "temp") ? "temp" : "output")}";
-                        if (!string.IsNullOrWhiteSpace(subfolder))
-                        {
-                            viewUrl += $"&subfolder={HttpUtility.UrlEncode(subfolder)}";
-                        }
-                        byte[] raw = await (await webClient.GetAsync($"{webAddress}/view?{viewUrl}")).Content.ReadAsByteArrayAsync();
-                        if (raw is null || raw.Length == 0)
-                        {
-                            batchIndex++;
-                            continue;
-                        }
-                        string ext = filename.AfterLast('.');
-                        string format = outImage.TryGetValue("format", out JToken formatTok) ? formatTok.ToString() : null;
-                        MediaType type = MediaType.GetByExtension(ext) ?? MediaType.TypesByMimeType.GetValueOrDefault(format ?? "") ?? MediaType.ImagePng;
-                        MediaFile file = type.MetaType.CreateNew(raw, type);
-                        string metadata = new JObject()
-                        {
-                            ["source"] = "comfy_workflow",
-                            ["prompt_id"] = promptId,
-                            ["filename"] = filename,
-                            ["subfolder"] = subfolder,
-                            ["collection"] = collectionName
-                        }.ToString(Newtonsoft.Json.Formatting.None);
-                        T2IEngine.ImageOutput imageOutput = new() { File = file, IsReal = true };
-                        (string savedUrl, string localPath) = session.SaveImage(imageOutput, batchIndex, saveInput, metadata);
-                        if (savedUrl != "ERROR" && !string.IsNullOrWhiteSpace(localPath))
-                        {
-                            UserOutputHistoryIndex.RecordOutput(session, savedUrl, localPath, metadata, requestId, batchIndex);
-                        }
+                        Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} file={filename} skip-existing");
                         batchIndex++;
+                        return;
                     }
+                    string viewUrl = $"filename={HttpUtility.UrlEncode(filename)}&type={(($"{outImage["type"]}" == "temp") ? "temp" : "output")}";
+                    if (!string.IsNullOrWhiteSpace(subfolder))
+                    {
+                        viewUrl += $"&subfolder={HttpUtility.UrlEncode(subfolder)}";
+                    }
+                    byte[] raw = await (await webClient.GetAsync($"{webAddress}/view?{viewUrl}")).Content.ReadAsByteArrayAsync();
+                    if (raw is null || raw.Length == 0)
+                    {
+                        Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} file={filename} skip-empty-raw");
+                        batchIndex++;
+                        return;
+                    }
+                    string ext = filename.AfterLast('.');
+                    string format = outImage.TryGetValue("format", out JToken formatTok) ? formatTok.ToString() : null;
+                    MediaType type = MediaType.GetByExtension(ext) ?? MediaType.TypesByMimeType.GetValueOrDefault(format ?? "") ?? MediaType.ImagePng;
+                    MediaFile file = type.MetaType.CreateNew(raw, type);
+                    string metadata = new JObject()
+                    {
+                        ["source"] = "comfy_workflow",
+                        ["prompt_id"] = promptId,
+                        ["filename"] = filename,
+                        ["subfolder"] = subfolder,
+                        ["collection"] = collectionName
+                    }.ToString(Newtonsoft.Json.Formatting.None);
+                    T2IEngine.ImageOutput imageOutput = new() { File = file, IsReal = true };
+                    (string savedUrl, string localPath) = session.SaveImage(imageOutput, batchIndex, saveInput, metadata);
+                    if (savedUrl != "ERROR" && !string.IsNullOrWhiteSpace(localPath))
+                    {
+                        UserOutputHistoryIndex.RecordOutput(session, savedUrl, localPath, metadata, requestId, batchIndex);
+                        Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} file={filename} saved={savedUrl}");
+                    }
+                    else
+                    {
+                        Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} file={filename} save-failed");
+                    }
+                    batchIndex++;
                 }
-                await syncCollection(outData["images"] as JArray, "images");
-                await syncCollection(outData["gifs"] as JArray, "gifs");
-                await syncCollection(outData["audio"] as JArray, "audio");
+                JArray images = outData["images"] as JArray;
+                JArray gifs = outData["gifs"] as JArray;
+                JArray audio = outData["audio"] as JArray;
+                if (images?.LastOrDefault() is JObject lastImage)
+                {
+                    Logs.Debug($"[ComfyGallerySync] prompt={promptId} select=images count={images.Count}");
+                    await syncSingleMedia(lastImage, "images");
+                }
+                else if (gifs?.LastOrDefault() is JObject lastGif)
+                {
+                    Logs.Debug($"[ComfyGallerySync] prompt={promptId} select=gifs count={gifs.Count}");
+                    await syncSingleMedia(lastGif, "gifs");
+                }
+                else if (audio?.LastOrDefault() is JObject lastAudio)
+                {
+                    Logs.Debug($"[ComfyGallerySync] prompt={promptId} select=audio count={audio.Count}");
+                    await syncSingleMedia(lastAudio, "audio");
+                }
+                else
+                {
+                    Logs.Debug($"[ComfyGallerySync] prompt={promptId} skip-no-media-in-final-output");
+                }
             }
         }
     }
@@ -893,7 +919,7 @@ public class ComfyUIRedirectHelper
                 {
                     HttpResponseMessage rawResponse = await localBack.Client.GetAsync($"{localBack.WebAddress}/{path}");
                     JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
-                    JObject filteredHistory = FilterHistoryResponse(swarmUser, history, context);
+                    JObject filteredHistory = FilterHistoryResponse(swarmUser, history);
                     if (filteredHistory.HasValues)
                     {
                         await SyncHistoryOutputsToUserGallery(swarmUser, localBack.Client, localBack.WebAddress, filteredHistory);
