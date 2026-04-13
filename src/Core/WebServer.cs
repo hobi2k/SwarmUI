@@ -205,6 +205,10 @@ public class WebServer
                     }
                 }
             }
+            if (Program.ServerSettings.UserAuthorization.AuthorizationRequired)
+            {
+                WebUtil.EnsureValidLoginOrAutoGuest(context);
+            }
             await next();
         });
         WebApp.UseResponseCompression();

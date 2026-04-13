@@ -5,11 +5,12 @@
     bool passwordRegister = Program.ServerSettings.UserAuthorization.Registration.SimplePasswordRegistration;
     bool oAuthRegister = Program.ServerSettings.UserAuthorization.Registration.OAuthRegistration;
     bool googleOAuthRegister = oAuthRegister && Program.ServerSettings.UserAuthorization.OAuth.GoogleOAuth;
+    bool manualLogin = WebUtil.IsManualLoginRequested(HttpContext);
 }
 @section Header {
     <link rel="stylesheet" href="css/loginpage.css?vary=@Utilities.VaryID" />
 }
-@if (WebUtil.HasValidLogin(HttpContext))
+@if (!manualLogin && WebUtil.HasValidLogin(HttpContext))
 {
     <script>window.location.href = "Text2Image";</script>
     return;

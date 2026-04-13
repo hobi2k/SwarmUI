@@ -14,6 +14,8 @@ namespace SwarmUI.Utils;
 /// <summary>Helper utilities for web content generation.</summary>
 public static class WebUtil
 {
+    public const string AutoLoginUserContextKey = "swarm_auto_login_user";
+
     public static HtmlString Toast(string box_id, string header, string small_side, string content_id, string content, bool show)
     {
         return new HtmlString($"""
@@ -254,6 +256,85 @@ public static class WebUtil
         return GetValidLogin(context) is not null;
     }
 
+    public static bool IsManualLoginRequested(HttpContext context)
+    {
+        if (context is null)
+        {
+            return false;
+        }
+        if (context.Request.Query.TryGetValue("manual_login", out StringValues manual))
+        {
+            string value = manual.FirstOrDefault()?.ToLowerInvariant();
+            if (value == "1" || value == "true" || value == "yes")
+            {
+                return true;
+            }
+        }
+        string path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
+        if (path == "/login" || path == "/register")
+        {
+            return true;
+        }
+        string referer = context.Request.Headers.Referer.FirstOrDefault()?.ToLowerInvariant() ?? "";
+        if (referer.Contains("/login") || referer.Contains("/register"))
+        {
+            return true;
+        }
+        return false;
+    }
+
+    public static bool IsAutoGuestLoginEnabled()
+    {
+        return Program.ServerSettings.UserAuthorization.AuthorizationRequired && Program.ServerSettings.UserAuthorization.AutoGuestLogin;
+    }
+
+    public static User EnsureValidLoginOrAutoGuest(HttpContext context)
+    {
+        User existing = GetValidLogin(context);
+        if (existing is not null || !IsAutoGuestLoginEnabled() || IsManualLoginRequested(context))
+        {
+            return existing;
+        }
+        string role = Program.ServerSettings.UserAuthorization.AutoGuestRole;
+        if (string.IsNullOrWhiteSpace(role) || !Program.Sessions.Roles.ContainsKey(role))
+        {
+            role = "user";
+        }
+        User user = null;
+        string username = null;
+        for (int i = 0; i < 100; i++)
+        {
+            username = $"autoguest_{Utilities.SecureRandomHex(8).ToLowerInvariant()}";
+            user = Program.Sessions.RegisterUser(username, Utilities.SecureRandomHex(32), role, false);
+            if (user is not null)
+            {
+                break;
+            }
+        }
+        if (user is null)
+        {
+            Logs.Error("Auto guest login failed: could not create a unique guest account.");
+            return null;
+        }
+        string ip = GetIPString(context);
+        string userAgent = AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
+        (_, string tok) = user.CreateLoginSession(ip, userAgent);
+        if (tok is null)
+        {
+            Logs.Error($"Auto guest login failed: could not create a login session for '{username}'.");
+            return null;
+        }
+        context.Response.Cookies.Append("swarm_token", tok, new CookieOptions()
+        {
+            HttpOnly = true,
+            Expires = DateTimeOffset.UtcNow.AddYears(1),
+            SameSite = SameSiteMode.Lax
+        });
+        context.Items[AutoLoginUserContextKey] = user;
+        Logs.Info($"Auto-created and logged in guest account '{username}' for {ip}.");
+        return user;
+    }
+
     public static string[] GetSwarmTokenFor(HttpContext context)
     {
         if (!context.Request.Cookies.TryGetValue("swarm_token", out string token))
@@ -313,13 +394,25 @@ public static class WebUtil
     {
         try
         {
+            if (context.Items.TryGetValue(AutoLoginUserContextKey, out object cachedUser) && cachedUser is User cached)
+            {
+                return cached;
+            }
             string ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            if (Program.ServerSettings.UserAuthorization.AllowLocalhostBypass && (ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1") && !context.Request.Headers.ContainsKey("X-Forwarded-For"))
+            if (!Program.ServerSettings.UserAuthorization.AutoGuestLogin
+                && Program.ServerSettings.UserAuthorization.AllowLocalhostBypass
+                && (ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1")
+                && !context.Request.Headers.ContainsKey("X-Forwarded-For"))
             {
                 return Program.Sessions.GetUser(SessionHandler.LocalUserID);
             }
             string[] parts = GetSwarmTokenFor(context);
-            return GetUserForSwarmToken(context, parts);
+            User user = GetUserForSwarmToken(context, parts);
+            if (user is not null)
+            {
+                context.Items[AutoLoginUserContextKey] = user;
+            }
+            return user;
         }
         catch (Exception ex)
         {
