@@ -104,17 +104,43 @@ public class ComfyUIRedirectHelper
         return !string.IsNullOrWhiteSpace(promptId) && GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
+    /// <summary>prompt_id를 포함하는 이벤트 타입 목록이다. 이 타입은 소유권 검사를 거친다.</summary>
+    public static readonly HashSet<string> PromptScopedEventTypes =
+    [
+        "executing", "progress", "executed", "execution_error",
+        "execution_start", "execution_cached", "execution_interrupted"
+    ];
+
     /// <summary>Comfy websocket JSON 이벤트를 현재 사용자 prompt 기준으로 필터링할지 반환한다.</summary>
     /// <param name="swarmUser">현재 Swarm 사용자다.</param>
     /// <param name="parsed">검사할 websocket 메시지다.</param>
     /// <returns>메시지를 현재 사용자에게 보여줘도 되면 true를 반환한다.</returns>
     public static bool ShouldForwardComfyEvent(User swarmUser, JObject parsed)
     {
-        if (parsed?["data"] is not JObject dataObj || !dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
+        string type = parsed?["type"]?.ToString();
+        if (type is null)
         {
             return true;
         }
-        return IsOwnedPromptId(swarmUser, promptIdTok.ToString());
+        if (parsed["data"] is JObject dataObj && dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
+        {
+            // prompt_id가 있으면 소유권 검사
+            return IsOwnedPromptId(swarmUser, promptIdTok.ToString());
+        }
+        // prompt_id는 없지만 prompt-scoped 이벤트 타입이면 차단
+        // (executing { node: null } 형태로 prompt_id 없이 완료 신호를 보내는 경우 등)
+        if (PromptScopedEventTypes.Contains(type))
+        {
+            // data 안에 prompt_id가 없는 executing은 node=null(완료 신호)일 수 있음
+            // 이 경우 현재 사용자가 실행 중인 작업이 있을 때만 통과
+            if (type == "executing" && parsed["data"] is JObject execData && execData["node"]?.Type == JTokenType.Null)
+            {
+                return GetOwnedPromptIds(swarmUser).Count > 0;
+            }
+            return false;
+        }
+        // status, crystool 등 전역 이벤트는 통과 (queue_remaining은 이미 user.TotalQueue로 교체됨)
+        return true;
     }
 
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
