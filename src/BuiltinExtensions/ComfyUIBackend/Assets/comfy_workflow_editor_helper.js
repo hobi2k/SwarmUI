@@ -24,6 +24,16 @@ let comfyIsOutputNodeMap = {};
 
 let comfyHasTriedToLoad = false;
 
+function comfyEnsureBrowserSessionKey() {
+    let existing = getCookie('comfy_session_key');
+    if (existing) {
+        return existing;
+    }
+    let created = `comfy_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    setCookie('comfy_session_key', created, 365);
+    return created;
+}
+
 let comfyAltSaveNodes = ['ADE_AnimateDiffCombine', 'VHS_VideoCombine', 'SaveAnimatedWEBP', 'SaveAnimatedPNG', 'SwarmSaveAnimatedWebpWS', 'SwarmSaveAnimationWS'];
 
 let swarmComfyInjectedHeaderSpacer = null, swarmComfySideToolbar = null, swarmComfySidePanel = null, swarmComfyBreadcrumbs = null, swarmComfySubGraphBar = null;
@@ -76,6 +86,7 @@ function comfyTryToLoad() {
     if (hasComfyLoaded) {
         return;
     }
+    comfyEnsureBrowserSessionKey();
     let oldSpinner = document.getElementById('comfy_workflow_loadspinner');
     if (oldSpinner) {
         oldSpinner.remove();

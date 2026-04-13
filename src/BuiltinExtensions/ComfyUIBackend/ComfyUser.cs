@@ -23,6 +23,9 @@ public class ComfyUser
 
     public string MasterSID;
 
+    /// <summary>Browser-level session key used to isolate embedded Comfy workflow state per viewer.</summary>
+    public string BrowserSessionKey;
+
     public int TotalQueue => Clients.Values.Sum(c => c.QueueRemaining);
 
     public SemaphoreSlim Lock = new(1, 1);

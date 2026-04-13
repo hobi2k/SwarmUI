@@ -28,6 +28,9 @@ public class ComfyUIRedirectHelper
     /// <summary>Map of all currently connected users.</summary>
     public static ConcurrentDictionary<string, ComfyUser> Users = new();
 
+    /// <summary>Map of browser session keys to active embedded Comfy users.</summary>
+    public static ConcurrentDictionary<string, ComfyUser> BrowserUsers = new();
+
     /// <summary>Set of backend IDs that have recently been assigned to a user (to try to spread new users onto different backends where possible).</summary>
     public static ConcurrentDictionary<int, int> RecentlyClaimedBackends = new();
 
@@ -90,6 +93,39 @@ public class ComfyUIRedirectHelper
         return [.. Users.Values.Where(u => u.SwarmUser?.UserID == swarmUser.UserID).Distinct()];
     }
 
+    public static string GetBrowserSessionKey(HttpContext context)
+    {
+        if (context?.Request?.Cookies is null)
+        {
+            return null;
+        }
+        return context.Request.Cookies.TryGetValue("comfy_session_key", out string key) && !string.IsNullOrWhiteSpace(key) ? key : null;
+    }
+
+    public static ComfyUser GetRequestComfyUser(HttpContext context, User swarmUser = null)
+    {
+        string browserSessionKey = GetBrowserSessionKey(context);
+        if (!string.IsNullOrWhiteSpace(browserSessionKey) && BrowserUsers.TryGetValue(browserSessionKey, out ComfyUser byBrowser))
+        {
+            return byBrowser;
+        }
+        if (swarmUser is not null)
+        {
+            return GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
+        }
+        return null;
+    }
+
+    public static HashSet<string> GetOwnedPromptIdsForContext(HttpContext context, User swarmUser)
+    {
+        ComfyUser comfyUser = GetRequestComfyUser(context, swarmUser);
+        if (comfyUser is not null)
+        {
+            return [.. comfyUser.OwnedPromptIds.Keys];
+        }
+        return GetOwnedPromptIds(swarmUser);
+    }
+
     /// <summary>현재 Swarm 사용자 소유 prompt ID 집합을 반환한다.</summary>
     /// <param name="swarmUser">확인할 Swarm 사용자다.</param>
     /// <returns>현재 사용자 소유 prompt ID 집합이다.</returns>
@@ -106,6 +142,15 @@ public class ComfyUIRedirectHelper
     {
         if (string.IsNullOrWhiteSpace(promptId)) return false;
         return GetOwnedPromptIds(swarmUser).Contains(promptId);
+    }
+
+    public static bool IsOwnedPromptIdForContext(HttpContext context, User swarmUser, string promptId)
+    {
+        if (string.IsNullOrWhiteSpace(promptId))
+        {
+            return false;
+        }
+        return GetOwnedPromptIdsForContext(context, swarmUser).Contains(promptId);
     }
 
     /// <summary>Comfy websocket JSON 이벤트를 현재 ComfyUser 소유 prompt 기준으로 필터링할지 반환한다.</summary>
@@ -171,17 +216,17 @@ public class ComfyUIRedirectHelper
     /// <param name="swarmUser">현재 Swarm 사용자다.</param>
     /// <param name="queue">원본 queue 응답이다.</param>
     /// <returns>필터링된 queue 응답이다.</returns>
-    public static JObject FilterQueueResponse(User swarmUser, JObject queue)
+    public static JObject FilterQueueResponse(User swarmUser, JObject queue, HttpContext context = null)
     {
         bool keepItem(JToken item)
         {
             if (item is JArray arr && arr.Count > 1)
             {
-                return IsOwnedPromptId(swarmUser, arr[1]?.ToString());
+                return context is null ? IsOwnedPromptId(swarmUser, arr[1]?.ToString()) : IsOwnedPromptIdForContext(context, swarmUser, arr[1]?.ToString());
             }
             if (item is JObject obj)
             {
-                return IsOwnedPromptId(swarmUser, obj["prompt_id"]?.ToString());
+                return context is null ? IsOwnedPromptId(swarmUser, obj["prompt_id"]?.ToString()) : IsOwnedPromptIdForContext(context, swarmUser, obj["prompt_id"]?.ToString());
             }
             return false;
         }
@@ -206,12 +251,12 @@ public class ComfyUIRedirectHelper
     /// <param name="swarmUser">현재 Swarm 사용자다.</param>
     /// <param name="history">원본 history 응답이다.</param>
     /// <returns>필터링된 history 응답이다.</returns>
-    public static JObject FilterHistoryResponse(User swarmUser, JObject history)
+    public static JObject FilterHistoryResponse(User swarmUser, JObject history, HttpContext context = null)
     {
         JObject result = new();
         foreach (JProperty property in history.Properties())
         {
-            if (IsOwnedPromptId(swarmUser, property.Name))
+            if (context is null ? IsOwnedPromptId(swarmUser, property.Name) : IsOwnedPromptIdForContext(context, swarmUser, property.Name))
             {
                 result[property.Name] = property.Value;
             }
@@ -388,7 +433,11 @@ public class ComfyUIRedirectHelper
             Logs.Debug($"Comfy backend direct websocket request to {path}, have {allBackends.Count} backends available");
             WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
             List<Task> tasks = [];
-            ComfyUser user = new() { Socket = socket, SwarmUser = swarmUser, WantsAllBackends = wantsMulti, WantsQueuing = doMultiStr == "queue", WantsReserve = doMultiStr == "reserve" };
+            ComfyUser user = new() { Socket = socket, SwarmUser = swarmUser, WantsAllBackends = wantsMulti, WantsQueuing = doMultiStr == "queue", WantsReserve = doMultiStr == "reserve", BrowserSessionKey = GetBrowserSessionKey(context) };
+            if (!string.IsNullOrWhiteSpace(user.BrowserSessionKey))
+            {
+                BrowserUsers[user.BrowserSessionKey] = user;
+            }
             user.RunSendTask();
             user.RunClientReceiveTask();
             NewUserEvent?.Invoke(user);
@@ -564,6 +613,10 @@ public class ComfyUIRedirectHelper
                         outSocket.Dispose();
                         if (user.Clients.IsEmpty())
                         {
+                            if (!string.IsNullOrWhiteSpace(user.BrowserSessionKey))
+                            {
+                                BrowserUsers.TryRemove(user.BrowserSessionKey, out _);
+                            }
                             Users.TryRemove(client.SID, out _);
                             _ = Utilities.RunCheckedTask(() =>
                             {
@@ -618,7 +671,7 @@ public class ComfyUIRedirectHelper
                     if (parsed.TryGetValue("client_id", out JToken clientIdTok))
                     {
                         string sid = clientIdTok.ToString();
-                        ComfyUser user = Users.GetValueOrDefault(sid) ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
+                        ComfyUser user = Users.GetValueOrDefault(sid) ?? GetRequestComfyUser(context, swarmUser) ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
                         promptComfyUser = user;
                         if (user is not null)
                         {
@@ -726,7 +779,20 @@ public class ComfyUIRedirectHelper
                 await context.Request.Body.CopyToAsync(inputCopy);
                 string inputText = Encoding.UTF8.GetString(inputCopy.ToArray());
                 JObject requestJson = string.IsNullOrWhiteSpace(inputText) ? new JObject() : inputText.ParseToJson();
-                JObject filteredRequest = FilterQueueMutationRequest(swarmUser, requestJson);
+                HashSet<string> ownedPromptIds = GetOwnedPromptIdsForContext(context, swarmUser);
+                JObject filteredRequest = new();
+                if (requestJson.TryGetValue("delete", out JToken deleteTok) && deleteTok is JArray deleteArr)
+                {
+                    JArray allowedDeletes = new(deleteArr.Where(id => ownedPromptIds.Contains(id?.ToString())));
+                    if (allowedDeletes.Count > 0)
+                    {
+                        filteredRequest["delete"] = allowedDeletes;
+                    }
+                }
+                if (requestJson.TryGetValue("clear", out JToken clearTok) && clearTok.Type == JTokenType.Boolean && clearTok.Value<bool>() && ownedPromptIds.Count > 0)
+                {
+                    filteredRequest["delete"] = new JArray(ownedPromptIds);
+                }
                 if (!filteredRequest.HasValues)
                 {
                     response = new HttpResponseMessage(HttpStatusCode.OK);
@@ -753,7 +819,20 @@ public class ComfyUIRedirectHelper
                 await context.Request.Body.CopyToAsync(inputCopy);
                 string inputText = Encoding.UTF8.GetString(inputCopy.ToArray());
                 JObject requestJson = string.IsNullOrWhiteSpace(inputText) ? new JObject() : inputText.ParseToJson();
-                JObject filteredRequest = FilterQueueMutationRequest(swarmUser, requestJson);
+                HashSet<string> ownedPromptIds = GetOwnedPromptIdsForContext(context, swarmUser);
+                JObject filteredRequest = new();
+                if (requestJson.TryGetValue("delete", out JToken deleteTok) && deleteTok is JArray deleteArr)
+                {
+                    JArray allowedDeletes = new(deleteArr.Where(id => ownedPromptIds.Contains(id?.ToString())));
+                    if (allowedDeletes.Count > 0)
+                    {
+                        filteredRequest["delete"] = allowedDeletes;
+                    }
+                }
+                if (requestJson.TryGetValue("clear", out JToken clearTok) && clearTok.Type == JTokenType.Boolean && clearTok.Value<bool>() && ownedPromptIds.Count > 0)
+                {
+                    filteredRequest["delete"] = new JArray(ownedPromptIds);
+                }
                 if (!filteredRequest.HasValues)
                 {
                     response = new HttpResponseMessage(HttpStatusCode.OK);
@@ -799,7 +878,7 @@ public class ComfyUIRedirectHelper
                     rawQueues.Add((await rawResponse.Content.ReadAsStringAsync()).ParseToJson());
                 }
                 JObject mergedQueue = MergeQueueResponses(rawQueues);
-                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, mergedQueue)) };
+                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, mergedQueue, context)) };
             }
             else if (path == "history" || path.StartsWith("history?") || path == "api/history" || path.StartsWith("api/history?")
                 || path.StartsWith("history/") || path.StartsWith("api/history/"))
@@ -809,7 +888,7 @@ public class ComfyUIRedirectHelper
                 {
                     HttpResponseMessage rawResponse = await localBack.Client.GetAsync($"{localBack.WebAddress}/{path}");
                     JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
-                    JObject filteredHistory = FilterHistoryResponse(swarmUser, history);
+                    JObject filteredHistory = FilterHistoryResponse(swarmUser, history, context);
                     if (filteredHistory.HasValues)
                     {
                         await SyncHistoryOutputsToUserGallery(swarmUser, localBack.Client, localBack.WebAddress, filteredHistory);
