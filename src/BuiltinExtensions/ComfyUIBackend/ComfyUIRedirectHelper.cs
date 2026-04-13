@@ -424,8 +424,19 @@ public class ComfyUIRedirectHelper
                                                 string type = parsed["type"]?.ToString();
                                                 if (type == "executing")
                                                 {
-                                                    client.LastExecuting = parsed;
-                                                    user.LastExecuting = parsed;
+                                                    // node=null이면 이 prompt 실행 완료 → LastExecuting 초기화
+                                                    JToken nodeTokExec = parsed["data"]?["node"];
+                                                    bool execDone = nodeTokExec is null || nodeTokExec.Type == JTokenType.Null || string.IsNullOrEmpty(nodeTokExec.ToString());
+                                                    if (execDone)
+                                                    {
+                                                        client.LastExecuting = null;
+                                                        user.LastExecuting = null;
+                                                    }
+                                                    else
+                                                    {
+                                                        client.LastExecuting = parsed;
+                                                        user.LastExecuting = parsed;
+                                                    }
                                                 }
                                                 else if (type == "progress")
                                                 {
@@ -442,6 +453,12 @@ public class ComfyUIRedirectHelper
                                     }
                                     else
                                     {
+                                        // 이진(binary) 메시지는 생성 중 미리보기 이미지다.
+                                        // 소유 작업이 현재 실행 중인 경우에만 전달한다.
+                                        if (received.MessageType == WebSocketMessageType.Binary && client.LastExecuting is null)
+                                        {
+                                            continue;
+                                        }
                                         // LastExecuting/LastProgress는 이미 소유권 검사 통과한 것만 저장되므로 그대로 재전송
                                         if (client.LastExecuting is not null && (client.LastExecuting != user.LastExecuting || client.LastProgress != user.LastProgress))
                                         {
