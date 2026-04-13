@@ -111,6 +111,46 @@ public static class UserOutputHistoryIndex
         }
     }
 
+    /// <summary>현재 사용자 소유 인덱스 항목을 삭제한다. 파일도 함께 삭제한다.</summary>
+    /// <param name="user">현재 사용자다.</param>
+    /// <param name="entryId">삭제할 항목 ID다.</param>
+    /// <returns>삭제 성공이면 true, 항목이 없거나 권한이 없으면 false를 반환한다.</returns>
+    public static bool DeleteEntry(User user, string entryId)
+    {
+        OutputEntry entry = GetEntry(user, entryId);
+        if (entry is null)
+        {
+            return false;
+        }
+        lock (Program.Sessions.DBLock)
+        {
+            Program.Sessions.OutputHistoryEntries.Delete(entryId);
+        }
+        try
+        {
+            if (File.Exists(entry.LocalPath))
+            {
+                Action<string> deleteFile = Program.ServerSettings.Paths.RecycleDeletedImages ? Utilities.SendFileToRecycle : File.Delete;
+                deleteFile(entry.LocalPath);
+                string fileBase = entry.LocalPath.BeforeLast('.');
+                foreach (string ext in new[] { ".txt", ".metadata.js", ".swarm.json", ".swarmpreview.jpg", ".swarmpreview.webp" })
+                {
+                    string altFile = $"{fileBase}{ext}";
+                    if (File.Exists(altFile))
+                    {
+                        deleteFile(altFile);
+                    }
+                }
+                OutputMetadataTracker.RemoveMetadataFor(entry.LocalPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"DeleteEntry: 파일 삭제 실패 '{entry.LocalPath}': {ex.Message}");
+        }
+        return true;
+    }
+
     /// <summary>현재 사용자에게 특정 요청 ID 항목이 이미 기록되어 있는지 반환한다.</summary>
     /// <param name="user">현재 사용자다.</param>
     /// <param name="requestId">확인할 요청 ID다.</param>
