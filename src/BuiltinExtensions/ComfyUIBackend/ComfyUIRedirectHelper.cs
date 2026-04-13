@@ -115,7 +115,9 @@ public class ComfyUIRedirectHelper
             return true;
         }
         string promptId = promptIdTok.ToString();
-        return comfyUser.OwnsPromptId(promptId);
+        bool result = comfyUser.OwnsPromptId(promptId);
+        Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} owned={comfyUser.OwnedPromptIds.Count} result={result}");
+        return result;
     }
 
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
@@ -818,6 +820,7 @@ public class ComfyUIRedirectHelper
                     // promptComfyUser는 위 /prompt 처리 블록에서 설정된다. 없으면 첫 번째 ComfyUser로 폴백한다.
                     ComfyUser targetComfyUser = promptComfyUser ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
                     targetComfyUser?.RegisterOwnedPromptId(pid);
+                    Logs.Debug($"[QFilter] prompt 등록: pid={pid} masterSID={targetComfyUser?.MasterSID ?? "null"} promptComfyUser_was_null={promptComfyUser is null}");
                 }
                 await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));
                 await context.Response.CompleteAsync();
