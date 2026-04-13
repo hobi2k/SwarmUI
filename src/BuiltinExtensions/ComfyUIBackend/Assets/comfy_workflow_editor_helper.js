@@ -26,6 +26,81 @@ let comfyHasTriedToLoad = false;
 let comfySwarmTaskPanel = null;
 let comfySwarmTaskFilter = 'all';
 let comfySwarmTaskPollInterval = null;
+let comfySwarmTaskStyleInjected = false;
+
+const comfySwarmTaskPanelCss = `
+.swarm-comfy-task-panel {
+    position: absolute;
+    top: 6.5rem;
+    right: 0.75rem;
+    width: 22rem;
+    max-height: calc(100vh - 10rem);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.9rem;
+    background: rgba(16, 16, 18, 0.96);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    color: #f2f2f2;
+    z-index: 9999;
+}
+.swarm-comfy-task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.85rem 0.95rem 0.35rem;
+}
+.swarm-comfy-task-title { font-size: 0.95rem; font-weight: 700; }
+.swarm-comfy-task-subtitle { font-size: 0.72rem; color: rgba(255,255,255,0.6); }
+.swarm-comfy-task-filters { display:flex; gap:0.4rem; padding:0 0.95rem 0.75rem; }
+.swarm-comfy-task-filter {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    color: #ddd;
+    font-size: 0.76rem;
+    padding: 0.24rem 0.62rem;
+}
+.swarm-comfy-task-filter.active { background: rgba(255,255,255,0.14); color:#fff; }
+.swarm-comfy-task-list {
+    display:flex; flex-direction:column; gap:0.65rem;
+    padding:0 0.95rem 0.95rem;
+    overflow-y:auto; max-height:calc(100vh - 15rem);
+}
+.swarm-comfy-task-card {
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 0.8rem;
+    background: rgba(255,255,255,0.03);
+    padding: 0.65rem;
+}
+.swarm-comfy-task-main { display:flex; gap:0.7rem; }
+.swarm-comfy-task-thumb {
+    width:3.6rem; height:3.6rem; border-radius:0.55rem;
+    object-fit:cover; background:rgba(255,255,255,0.06);
+}
+.swarm-comfy-task-thumb-empty {
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.72rem; color:rgba(255,255,255,0.7);
+}
+.swarm-comfy-task-meta { min-width:0; flex:1; }
+.swarm-comfy-task-status { font-size:0.82rem; font-weight:700; }
+.swarm-comfy-task-id, .swarm-comfy-task-progresslabel, .swarm-comfy-task-error, .swarm-comfy-task-empty {
+    font-size:0.72rem; color:rgba(255,255,255,0.72);
+}
+.swarm-comfy-task-id, .swarm-comfy-task-progresslabel, .swarm-comfy-task-error {
+    margin-top:0.2rem; overflow:hidden; text-overflow:ellipsis;
+}
+.swarm-comfy-task-progressbar {
+    margin-top:0.45rem; height:0.33rem; border-radius:999px;
+    background:rgba(255,255,255,0.08); overflow:hidden;
+}
+.swarm-comfy-task-progressfill { height:100%; background:linear-gradient(90deg, #4a90e2, #79d7ff); }
+.swarm-comfy-task-actions { display:flex; gap:0.4rem; margin-top:0.55rem; flex-wrap:wrap; }
+.swarm-comfy-task-action {
+    border:1px solid rgba(255,255,255,0.08); border-radius:0.55rem;
+    background:rgba(255,255,255,0.04); color:#fff; font-size:0.72rem;
+    padding:0.24rem 0.5rem; text-decoration:none;
+}
+`;
 
 function comfyTaskStatusLabel(status) {
     if (status == 'running') return '진행중';
@@ -43,7 +118,7 @@ function comfyHideNativeTaskPanel() {
     let labels = new Set(['Task Details', '작업 디테일', 'Queue', '대기열']);
     for (let elem of doc.querySelectorAll('div, span, h1, h2, h3, h4, h5, h6')) {
         let text = (elem.textContent || '').trim();
-        if (!labels.has(text) || elem.closest('.swarm-comfy-task-panel')) {
+        if ((!labels.has(text) && !text.includes('작업 디테일') && !text.includes('Task Details')) || elem.closest('.swarm-comfy-task-panel')) {
             continue;
         }
         let panel = elem.closest('.panel, .p-panel, .sidebar-item-panel, .sidebar-panel, [role="dialog"], section, article, div');
@@ -54,11 +129,23 @@ function comfyHideNativeTaskPanel() {
     }
 }
 
+function comfyInjectSwarmTaskStyles(doc) {
+    if (!doc || comfySwarmTaskStyleInjected) {
+        return;
+    }
+    let style = doc.createElement('style');
+    style.id = 'swarm-comfy-task-style';
+    style.textContent = comfySwarmTaskPanelCss;
+    doc.head.appendChild(style);
+    comfySwarmTaskStyleInjected = true;
+}
+
 function comfyEnsureSwarmTaskPanel() {
     let doc = comfyFrame()?.contentWindow?.document;
     if (!doc) {
         return null;
     }
+    comfyInjectSwarmTaskStyles(doc);
     let sidePanel = doc.querySelector('.side-bar-panel') || doc.body;
     sidePanel.style.position = sidePanel.style.position || 'relative';
     if (comfySwarmTaskPanel && comfySwarmTaskPanel.isConnected) {
@@ -145,10 +232,17 @@ function comfyRefreshSwarmTaskPanel() {
     if (!hasComfyLoaded) {
         return;
     }
+    comfyEnsureSwarmTaskPanel();
     comfyHideNativeTaskPanel();
-    getJsonDirect('ComfyBackendDirect/swarm/session_jobs', (_, data) => {
-        comfyRenderSwarmTasks(data?.tasks || []);
-    });
+    let frameWindow = comfyFrame()?.contentWindow;
+    if (!frameWindow?.fetch) {
+        comfyRenderSwarmTasks([]);
+        return;
+    }
+    frameWindow.fetch('/ComfyBackendDirect/swarm/session_jobs')
+        .then(r => r.ok ? r.json() : { tasks: [] })
+        .then(data => comfyRenderSwarmTasks(data?.tasks || []))
+        .catch(() => comfyRenderSwarmTasks([]));
 }
 
 function comfyStartSwarmTaskPolling() {
