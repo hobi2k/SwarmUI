@@ -117,7 +117,7 @@ public class ComfyUIRedirectHelper
         string promptId = promptIdTok.ToString();
         HashSet<string> owned = GetOwnedPromptIds(swarmUser);
         bool result = owned.Contains(promptId);
-        Logs.Debug($"[ComfyFilter] type={parsed["type"]} prompt_id={promptId} user={swarmUser?.UserID} owned=[{string.Join(",", owned)}] result={result}");
+        Logs.Info($"[ComfyFilter] type={parsed["type"]} prompt_id={promptId} user={swarmUser?.UserID} owned_count={owned.Count} result={result}");
         return result;
     }
 
@@ -423,8 +423,11 @@ public class ComfyUIRedirectHelper
                                                     && status.TryGetValue("exec_info", out JToken execTok) && execTok is JObject exec
                                                     && exec.TryGetValue("queue_remaining", out JToken queueRemTok))
                                                 {
-                                                    client.QueueRemaining = queueRemTok.Value<int>();
-                                                    dataObj["status"]["exec_info"]["queue_remaining"] = user.TotalQueue;
+                                                    // client.QueueRemaining은 이 사용자 소유 작업 수만 반영해야 한다.
+                                                    // ComfyUI의 queue_remaining은 전체 큐 수이므로 직접 사용하지 않는다.
+                                                    int ownedCount = GetOwnedPromptIds(swarmUser).Count;
+                                                    client.QueueRemaining = ownedCount;
+                                                    dataObj["status"]["exec_info"]["queue_remaining"] = ownedCount;
                                                 }
                                                 if (!ShouldForwardComfyEvent(swarmUser, parsed))
                                                 {
@@ -805,9 +808,13 @@ public class ComfyUIRedirectHelper
                 JObject responseJson = responseText.ParseToJson();
                 if (context.Request.Method == "POST" && responseJson.TryGetValue("prompt_id", out JToken promptIdTok))
                 {
-                    foreach (ComfyUser user in GetComfyUsersForSwarmUser(swarmUser))
+                    string pid = promptIdTok.ToString();
+                    List<ComfyUser> comfyUsers = GetComfyUsersForSwarmUser(swarmUser);
+                    Logs.Info($"[ComfyFilter] prompt 등록: prompt_id={pid} user={swarmUser?.UserID} comfyUserCount={comfyUsers.Count}");
+                    foreach (ComfyUser user in comfyUsers)
                     {
-                        user.RegisterOwnedPromptId(promptIdTok.ToString());
+                        user.RegisterOwnedPromptId(pid);
+                        Logs.Info($"[ComfyFilter] → ComfyUser에 등록 완료: SID={user.MasterSID}");
                     }
                 }
                 await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));
