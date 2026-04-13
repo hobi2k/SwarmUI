@@ -288,11 +288,39 @@ public static class WebUtil
         return Program.ServerSettings.UserAuthorization.AuthorizationRequired && Program.ServerSettings.UserAuthorization.AutoGuestLogin;
     }
 
+    public static bool IsAutoGuestUser(User user)
+    {
+        return user?.UserID?.StartsWith("autoguest_", StringComparison.OrdinalIgnoreCase) ?? false;
+    }
+
+    public static void EnsureAutoGuestRole(User user)
+    {
+        if (!IsAutoGuestLoginEnabled() || !IsAutoGuestUser(user))
+        {
+            return;
+        }
+        string role = Program.ServerSettings.UserAuthorization.AutoGuestRole;
+        if (string.IsNullOrWhiteSpace(role) || !Program.Sessions.Roles.ContainsKey(role))
+        {
+            role = "owner";
+        }
+        if (user.Settings.Roles.Count == 1 && string.Equals(user.Settings.Roles[0], role, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        user.Settings.Roles = [role];
+        user.Settings.TrySetFieldModified(nameof(User.Settings.Roles), true);
+        user.BuildRoles();
+        user.Save();
+        Logs.Info($"Auto guest account '{user.UserID}' role synchronized to '{role}'.");
+    }
+
     public static User EnsureValidLoginOrAutoGuest(HttpContext context)
     {
         User existing = GetValidLogin(context);
         if (existing is not null || !IsAutoGuestLoginEnabled() || IsManualLoginRequested(context))
         {
+            EnsureAutoGuestRole(existing);
             return existing;
         }
         string role = Program.ServerSettings.UserAuthorization.AutoGuestRole;
@@ -410,6 +438,7 @@ public static class WebUtil
             User user = GetUserForSwarmToken(context, parts);
             if (user is not null)
             {
+                EnsureAutoGuestRole(user);
                 context.Items[AutoLoginUserContextKey] = user;
             }
             return user;
