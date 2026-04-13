@@ -105,9 +105,6 @@ public class ComfyUIRedirectHelper
     public static bool IsOwnedPromptId(User swarmUser, string promptId)
     {
         if (string.IsNullOrWhiteSpace(promptId)) return false;
-        // 이 인스턴스가 발행한 prompt_id는 prefix로 즉시 확인한다.
-        if (promptId.StartsWith($"swarm-{InstanceId}-")) return true;
-        // queuing 경로 등 prefix 없는 ID는 OwnedPromptIds로 확인한다.
         return GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
@@ -122,10 +119,52 @@ public class ComfyUIRedirectHelper
             return true;
         }
         string promptId = promptIdTok.ToString();
-        // 이 인스턴스가 발행한 prompt_id는 prefix로 즉시 확인한다.
-        bool result = promptId.StartsWith($"swarm-{InstanceId}-") || comfyUser.OwnsPromptId(promptId);
+        bool result = comfyUser.OwnsPromptId(promptId);
         Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} result={result}");
         return result;
+    }
+
+    /// <summary>여러 backend의 queue 응답을 하나로 합친다.</summary>
+    public static JObject MergeQueueResponses(IEnumerable<JObject> queues)
+    {
+        JArray running = [];
+        JArray pending = [];
+        foreach (JObject queue in queues.Where(q => q is not null))
+        {
+            if (queue["queue_running"] is JArray queueRunning)
+            {
+                foreach (JToken item in queueRunning)
+                {
+                    running.Add(item);
+                }
+            }
+            if (queue["queue_pending"] is JArray queuePending)
+            {
+                foreach (JToken item in queuePending)
+                {
+                    pending.Add(item);
+                }
+            }
+        }
+        return new JObject()
+        {
+            ["queue_running"] = running,
+            ["queue_pending"] = pending
+        };
+    }
+
+    /// <summary>여러 backend의 history 응답을 하나로 합친다.</summary>
+    public static JObject MergeHistoryResponses(IEnumerable<JObject> histories)
+    {
+        JObject merged = new();
+        foreach (JObject history in histories.Where(h => h is not null))
+        {
+            foreach (JProperty property in history.Properties())
+            {
+                merged[property.Name] = property.Value;
+            }
+        }
+        return merged;
     }
 
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
@@ -440,11 +479,9 @@ public class ComfyUIRedirectHelper
                                                 string type = parsed["type"]?.ToString();
                                                 if (type == "status")
                                                 {
-                                                    // ComfyUI의 실제 queue_remaining으로 QueueRemaining을 동기화한다.
-                                                    int queueRemaining = dataObj["status"]?["exec_info"]?["queue_remaining"]?.Value<int>() ?? -1;
-                                                    if (queueRemaining >= 0)
+                                                    if (dataObj["status"]?["exec_info"]?["queue_remaining"] is not null)
                                                     {
-                                                        client.QueueRemaining = queueRemaining;
+                                                        dataObj["status"]["exec_info"]["queue_remaining"] = user.TotalQueue;
                                                     }
                                                 }
                                                 else if (type == "executing")
@@ -755,18 +792,31 @@ public class ComfyUIRedirectHelper
         {
             if (path == "queue" || path.StartsWith("queue?") || path.StartsWith("queue/") || path == "api/queue" || path.StartsWith("api/queue?") || path.StartsWith("api/queue/"))
             {
-                HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
-                JObject queue = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
-                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, queue)) };
+                List<JObject> rawQueues = [];
+                foreach (ComfyUIBackendExtension.ComfyBackendData localBack in allBackends)
+                {
+                    HttpResponseMessage rawResponse = await localBack.Client.GetAsync($"{localBack.WebAddress}/{path}");
+                    rawQueues.Add((await rawResponse.Content.ReadAsStringAsync()).ParseToJson());
+                }
+                JObject mergedQueue = MergeQueueResponses(rawQueues);
+                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, mergedQueue)) };
             }
             else if (path == "history" || path.StartsWith("history?") || path == "api/history" || path.StartsWith("api/history?")
                 || path.StartsWith("history/") || path.StartsWith("api/history/"))
             {
-                HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
-                JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
-                JObject filteredHistory = FilterHistoryResponse(swarmUser, history);
-                await SyncHistoryOutputsToUserGallery(swarmUser, webClient, webAddress, filteredHistory);
-                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(filteredHistory) };
+                List<JObject> filteredHistories = [];
+                foreach (ComfyUIBackendExtension.ComfyBackendData localBack in allBackends)
+                {
+                    HttpResponseMessage rawResponse = await localBack.Client.GetAsync($"{localBack.WebAddress}/{path}");
+                    JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
+                    JObject filteredHistory = FilterHistoryResponse(swarmUser, history);
+                    if (filteredHistory.HasValues)
+                    {
+                        await SyncHistoryOutputsToUserGallery(swarmUser, localBack.Client, localBack.WebAddress, filteredHistory);
+                    }
+                    filteredHistories.Add(filteredHistory);
+                }
+                response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(MergeHistoryResponses(filteredHistories)) };
             }
             else if (path.StartsWith("view?filename=") || path.StartsWith("api/view?filename=") || path.StartsWith("api/vhs/queryvideo?filename="))
             {
