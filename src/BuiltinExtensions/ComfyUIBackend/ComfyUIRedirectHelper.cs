@@ -49,6 +49,9 @@ public class ComfyUIRedirectHelper
     /// <summary>이 SwarmUI 인스턴스의 고유 식별자. 시작 시 생성되며 prompt_id prefix로 사용한다.</summary>
     public static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
 
+    /// <summary>현재 프로세스에서 Swarm comfy task 추적을 시작한 시각(UnixTimeSeconds)이다.</summary>
+    public static readonly long TaskTrackingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
     /// <summary>Map of all currently connected users.</summary>
     public static ConcurrentDictionary<string, ComfyUser> Users = new();
 
@@ -322,6 +325,10 @@ public class ComfyUIRedirectHelper
         }
         foreach (UserOutputHistoryIndex.OutputEntry entry in outputEntries.OrderByDescending(e => e.CreatedAt))
         {
+            if (entry.CreatedAt < TaskTrackingStartTime)
+            {
+                continue;
+            }
             if (string.IsNullOrWhiteSpace(entry.Metadata))
             {
                 continue;
@@ -399,6 +406,15 @@ public class ComfyUIRedirectHelper
             }));
     }
 
+    public static void ClearTasksForUser(User swarmUser)
+    {
+        if (swarmUser is null)
+        {
+            return;
+        }
+        SwarmTasksByUser.TryRemove(swarmUser.UserID, out _);
+    }
+
     /// <summary>대상 prompt ID가 현재 사용자 소유인지 반환한다.</summary>
     /// <param name="swarmUser">확인할 Swarm 사용자다.</param>
     /// <param name="promptId">검사할 prompt ID다.</param>
@@ -406,7 +422,6 @@ public class ComfyUIRedirectHelper
     public static bool IsOwnedPromptId(User swarmUser, string promptId)
     {
         if (string.IsNullOrWhiteSpace(promptId)) return false;
-        if (promptId.StartsWith($"swarm-{InstanceId}-")) return true;
         return GetOwnedPromptIds(swarmUser).Contains(promptId);
     }
 
@@ -430,7 +445,7 @@ public class ComfyUIRedirectHelper
             return true;
         }
         string promptId = promptIdTok.ToString();
-        bool result = promptId.StartsWith($"swarm-{InstanceId}-") || comfyUser.OwnsPromptId(promptId);
+        bool result = comfyUser.OwnsPromptId(promptId);
         Logs.Debug($"[QFilter] type={parsed["type"]} pid={promptId} masterSID={comfyUser.MasterSID} result={result}");
         return result;
     }
@@ -724,6 +739,14 @@ public class ComfyUIRedirectHelper
         if (!string.IsNullOrWhiteSpace(context.Request.QueryString.Value))
         {
             path = $"{path}{context.Request.QueryString.Value}";
+        }
+        if (context.Request.Method == "POST" && path == "swarm/clear_session_jobs")
+        {
+            ClearTasksForUser(swarmUser);
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(new JObject() { ["status"] = "ok" }.ToString(Newtonsoft.Json.Formatting.None));
+            await context.Response.CompleteAsync();
+            return;
         }
         if (context.Request.Method == "GET" && path == "swarm/session_jobs")
         {

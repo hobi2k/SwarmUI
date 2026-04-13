@@ -143,6 +143,16 @@
     cursor: move;
 }
 
+.swarm-comfy-task-clear {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.55rem;
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+    font-size: 0.72rem;
+    padding: 0.24rem 0.55rem;
+    cursor: pointer;
+}
+
 .swarm-comfy-task-title {
     font-size: 0.95rem;
     font-weight: 700;

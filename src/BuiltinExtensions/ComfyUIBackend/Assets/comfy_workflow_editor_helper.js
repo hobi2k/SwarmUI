@@ -69,6 +69,7 @@ function comfyEnsureSwarmTaskPanel() {
                 <div class="swarm-comfy-task-title">작업 디테일</div>
                 <div class="swarm-comfy-task-subtitle">Swarm</div>
             </div>
+            <button type="button" class="swarm-comfy-task-clear">비우기</button>
         </div>
         <div class="swarm-comfy-task-filters">
             <button type="button" data-filter="all" class="swarm-comfy-task-filter active">모두</button>
@@ -86,8 +87,15 @@ function comfyEnsureSwarmTaskPanel() {
             comfyRefreshSwarmTaskPanel();
         };
     });
+    panel.querySelector('.swarm-comfy-task-clear').onclick = async () => {
+        await new Promise(resolve => sendJsonToServer('ComfyBackendDirect/swarm/clear_session_jobs', {}, () => resolve(), () => resolve()));
+        comfyRenderSwarmTasks([]);
+    };
     let header = panel.querySelector('.swarm-comfy-task-header');
     header.onmousedown = (e) => {
+        if (findParentOfClass(e.target, 'swarm-comfy-task-clear')) {
+            return;
+        }
         if (e.button !== 0) {
             return;
         }
