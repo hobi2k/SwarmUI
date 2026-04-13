@@ -35,6 +35,7 @@ public static class T2IAPI
         API.RegisterAPICall(OpenImageFolder, true, Permissions.LocalImageFolder);
         API.RegisterAPICall(DeleteImage, true, Permissions.UserDeleteImage);
         API.RegisterAPICall(DeleteIndexedImage, true, Permissions.UserDeleteImage);
+        API.RegisterAPICall(DeleteIndexedImages, true, Permissions.UserDeleteImage);
         API.RegisterAPICall(ListT2IParams, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(TriggerRefresh, true, Permissions.FundamentalGenerateTabAccess); // Intentionally weird perm here: internal check for readonly vs true refresh
     }
@@ -845,6 +846,44 @@ public static class T2IAPI
             return new JObject() { ["error"] = "항목을 찾을 수 없거나 삭제 권한이 없습니다." };
         }
         return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("갤러리 인덱스 항목 여러 개와 실제 파일을 함께 삭제한다.",
+        """
+            "success": true,
+            "deleted": 3,
+            "failed": []
+        """)]
+    public static async Task<JObject> DeleteIndexedImages(Session session,
+        [API.APIParameter("삭제할 항목 ID 배열이다.")] string[] entry_ids)
+    {
+        if (entry_ids is null || entry_ids.Length == 0)
+        {
+            return new JObject() { ["error"] = "entry_ids가 비어있습니다." };
+        }
+        int deleted = 0;
+        JArray failed = [];
+        foreach (string entryId in entry_ids)
+        {
+            if (string.IsNullOrWhiteSpace(entryId))
+            {
+                continue;
+            }
+            if (UserOutputHistoryIndex.DeleteEntry(session.User, entryId))
+            {
+                deleted++;
+            }
+            else
+            {
+                failed.Add(entryId);
+            }
+        }
+        return new JObject()
+        {
+            ["success"] = failed.Count == 0,
+            ["deleted"] = deleted,
+            ["failed"] = failed
+        };
     }
 
     [API.APIDescription("Toggle whether an image is starred or not.", "\"new_state\": true")]
