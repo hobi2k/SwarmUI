@@ -22,6 +22,29 @@ namespace SwarmUI.Builtin_ComfyUIBackend;
 /// <summary>Helper class for network redirections for the '/ComfyBackendDirect' url path.</summary>
 public class ComfyUIRedirectHelper
 {
+    public class SwarmTaskResult
+    {
+        public string Url { get; set; }
+        public string PreviewUrl { get; set; }
+        public string Filename { get; set; }
+        public string Collection { get; set; }
+    }
+
+    public class SwarmTaskRecord
+    {
+        public string PromptId { get; set; }
+        public string UserId { get; set; }
+        public string Status { get; set; } = "queued";
+        public long CreatedAt { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        public long UpdatedAt { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        public double Progress { get; set; }
+        public int Value { get; set; }
+        public int Max { get; set; }
+        public string NodeId { get; set; }
+        public string Error { get; set; }
+        public List<SwarmTaskResult> Results { get; set; } = [];
+    }
+
     /// <summary>이 SwarmUI 인스턴스의 고유 식별자. 시작 시 생성되며 prompt_id prefix로 사용한다.</summary>
     public static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -33,6 +56,9 @@ public class ComfyUIRedirectHelper
 
     /// <summary>Set of backend IDs that have recently been assigned to a user (to try to spread new users onto different backends where possible).</summary>
     public static ConcurrentDictionary<int, int> RecentlyClaimedBackends = new();
+
+    /// <summary>Per-user comfy task state tracked by Swarm for isolated UI rendering.</summary>
+    public static ConcurrentDictionary<string, ConcurrentDictionary<string, SwarmTaskRecord>> SwarmTasksByUser = new();
 
     /// <summary>Map of themes to theme file injection content.</summary>
     public static ConcurrentDictionary<string, string> ComfyThemeData = new();
@@ -132,6 +158,152 @@ public class ComfyUIRedirectHelper
     public static HashSet<string> GetOwnedPromptIds(User swarmUser)
     {
         return [.. GetComfyUsersForSwarmUser(swarmUser).SelectMany(u => u.OwnedPromptIds.Keys)];
+    }
+
+    public static SwarmTaskRecord GetOrCreateTask(User swarmUser, string promptId)
+    {
+        if (swarmUser is null || string.IsNullOrWhiteSpace(promptId))
+        {
+            return null;
+        }
+        ConcurrentDictionary<string, SwarmTaskRecord> userTasks = SwarmTasksByUser.GetOrAdd(swarmUser.UserID, _ => new());
+        return userTasks.GetOrAdd(promptId, pid => new SwarmTaskRecord()
+        {
+            PromptId = pid,
+            UserId = swarmUser.UserID
+        });
+    }
+
+    public static void SetTaskQueued(User swarmUser, string promptId)
+    {
+        SwarmTaskRecord task = GetOrCreateTask(swarmUser, promptId);
+        if (task is null)
+        {
+            return;
+        }
+        task.Status = "queued";
+        task.Error = null;
+        task.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    public static void UpdateTaskFromEvent(User swarmUser, JObject parsed)
+    {
+        if (swarmUser is null || parsed?["data"] is not JObject dataObj || !dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
+        {
+            return;
+        }
+        string promptId = promptIdTok.ToString();
+        SwarmTaskRecord task = GetOrCreateTask(swarmUser, promptId);
+        if (task is null)
+        {
+            return;
+        }
+        string type = parsed["type"]?.ToString();
+        task.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        switch (type)
+        {
+            case "execution_start":
+            case "execution_cached":
+                task.Status = "queued";
+                task.Error = null;
+                break;
+            case "executing":
+                JToken nodeTok = dataObj["node"];
+                if (nodeTok is null || nodeTok.Type == JTokenType.Null || string.IsNullOrWhiteSpace(nodeTok.ToString()))
+                {
+                    task.Status = task.Results.Count > 0 ? "completed" : "queued";
+                    task.NodeId = null;
+                    task.Progress = task.Max > 0 ? 1 : task.Progress;
+                }
+                else
+                {
+                    task.Status = "running";
+                    task.NodeId = nodeTok.ToString();
+                    task.Error = null;
+                }
+                break;
+            case "progress":
+                task.Status = "running";
+                task.Value = dataObj["value"]?.Value<int>() ?? task.Value;
+                task.Max = dataObj["max"]?.Value<int>() ?? task.Max;
+                task.Progress = task.Max > 0 ? Math.Clamp((double)task.Value / task.Max, 0, 1) : task.Progress;
+                break;
+            case "executed":
+                task.Status = "running";
+                task.NodeId = dataObj["node"]?.ToString() ?? task.NodeId;
+                break;
+            case "execution_success":
+                task.Status = task.Results.Count > 0 ? "completed" : "running";
+                task.Progress = 1;
+                task.Error = null;
+                break;
+            case "execution_error":
+                task.Status = "failed";
+                task.Error = dataObj["exception_message"]?.ToString() ?? dataObj["error"]?.ToString() ?? "Execution failed";
+                break;
+            case "execution_interrupted":
+                task.Status = "interrupted";
+                task.Error = "Interrupted";
+                break;
+        }
+    }
+
+    public static void AddTaskResult(User swarmUser, string promptId, string savedUrl, string filename, string collectionName)
+    {
+        SwarmTaskRecord task = GetOrCreateTask(swarmUser, promptId);
+        if (task is null || string.IsNullOrWhiteSpace(savedUrl))
+        {
+            return;
+        }
+        string previewUrl = savedUrl.Contains('?') ? $"{savedUrl}&preview=true" : $"{savedUrl}?preview=true";
+        if (task.Results.Any(r => r.Url == savedUrl))
+        {
+            task.Status = "completed";
+            task.Progress = 1;
+            task.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return;
+        }
+        task.Results.Add(new SwarmTaskResult()
+        {
+            Url = savedUrl,
+            PreviewUrl = previewUrl,
+            Filename = filename,
+            Collection = collectionName
+        });
+        task.Status = "completed";
+        task.Progress = 1;
+        task.Error = null;
+        task.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    public static JArray GetTasksJsonForUser(User swarmUser)
+    {
+        if (swarmUser is null || !SwarmTasksByUser.TryGetValue(swarmUser.UserID, out ConcurrentDictionary<string, SwarmTaskRecord> tasks))
+        {
+            return [];
+        }
+        return new JArray(tasks.Values
+            .OrderByDescending(t => t.UpdatedAt)
+            .Take(100)
+            .Select(t => new JObject()
+            {
+                ["prompt_id"] = t.PromptId,
+                ["status"] = t.Status,
+                ["created_at"] = t.CreatedAt,
+                ["updated_at"] = t.UpdatedAt,
+                ["progress"] = t.Progress,
+                ["value"] = t.Value,
+                ["max"] = t.Max,
+                ["node_id"] = t.NodeId,
+                ["error"] = t.Error,
+                ["results"] = new JArray(t.Results.Select(r => new JObject()
+                {
+                    ["url"] = r.Url,
+                    ["preview_url"] = r.PreviewUrl,
+                    ["filename"] = r.Filename,
+                    ["collection"] = r.Collection
+                }))
+            }));
     }
 
     /// <summary>대상 prompt ID가 현재 사용자 소유인지 반환한다.</summary>
@@ -349,6 +521,7 @@ public class ComfyUIRedirectHelper
                     if (savedUrl != "ERROR" && !string.IsNullOrWhiteSpace(localPath))
                     {
                         UserOutputHistoryIndex.RecordOutput(session, savedUrl, localPath, metadata, requestId, batchIndex);
+                        AddTaskResult(swarmUser, promptId, savedUrl, filename, collectionName);
                         Logs.Debug($"[ComfyGallerySync] prompt={promptId} collection={collectionName} file={filename} saved={savedUrl}");
                     }
                     else
@@ -459,6 +632,16 @@ public class ComfyUIRedirectHelper
         {
             path = $"{path}{context.Request.QueryString.Value}";
         }
+        if (context.Request.Method == "GET" && path == "swarm/session_jobs")
+        {
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(new JObject()
+            {
+                ["tasks"] = GetTasksJsonForUser(swarmUser)
+            }.ToString(Newtonsoft.Json.Formatting.None));
+            await context.Response.CompleteAsync();
+            return;
+        }
         if (context.WebSockets.IsWebSocketRequest)
         {
             Logs.Debug($"Comfy backend direct websocket request to {path}, have {allBackends.Count} backends available");
@@ -555,6 +738,7 @@ public class ComfyUIRedirectHelper
                                                 {
                                                     continue;
                                                 }
+                                                UpdateTaskFromEvent(user.SwarmUser, parsed);
                                                 // 소유권 검사 통과한 이벤트만 LastExecuting/LastProgress에 저장
                                                 string type = parsed["type"]?.ToString();
                                                 if (type == "status")
@@ -715,6 +899,7 @@ public class ComfyUIRedirectHelper
                                 {
                                     (_, JObject responseJson) = user.SendPromptQueue(prompt);
                                     user.RegisterOwnedPromptId(responseJson["prompt_id"]?.ToString());
+                                    SetTaskQueued(swarmUser, responseJson["prompt_id"]?.ToString());
                                     response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(responseJson) };
                                     redirected = true;
                                     Logs.Info($"Sent Comfy backend direct prompt requested to general queue (from user {swarmUser.UserID})");
@@ -726,6 +911,7 @@ public class ComfyUIRedirectHelper
                                     string instancePrefixedId = $"swarm-{InstanceId}-{Guid.NewGuid():N}";
                                     parsed["prompt_id"] = instancePrefixedId;
                                     user.RegisterOwnedPromptId(instancePrefixedId);
+                                    SetTaskQueued(swarmUser, instancePrefixedId);
                                     ComfyClientData client = await user.SendPromptRegular(prompt, givePostError);
                                     if (client?.SID is not null)
                                     {
@@ -1003,6 +1189,7 @@ public class ComfyUIRedirectHelper
                     // promptComfyUser는 위 /prompt 처리 블록에서 설정된다. 없으면 첫 번째 ComfyUser로 폴백한다.
                     ComfyUser targetComfyUser = promptComfyUser ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
                     targetComfyUser?.RegisterOwnedPromptId(pid);
+                    SetTaskQueued(swarmUser, pid);
                     Logs.Debug($"[QFilter] prompt 등록: pid={pid} masterSID={targetComfyUser?.MasterSID ?? "null"} promptComfyUser_was_null={promptComfyUser is null}");
                 }
                 await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));

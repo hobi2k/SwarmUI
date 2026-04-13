@@ -23,6 +23,139 @@ let comfyObjectData = {};
 let comfyIsOutputNodeMap = {};
 
 let comfyHasTriedToLoad = false;
+let comfySwarmTaskPanel = null;
+let comfySwarmTaskFilter = 'all';
+let comfySwarmTaskPollInterval = null;
+
+function comfyTaskStatusLabel(status) {
+    if (status == 'running') return '진행중';
+    if (status == 'completed') return '완료됨';
+    if (status == 'failed') return '실패';
+    if (status == 'interrupted') return '중단됨';
+    return '대기중';
+}
+
+function comfyHideNativeTaskPanel() {
+    let doc = comfyFrame()?.contentWindow?.document;
+    if (!doc) {
+        return;
+    }
+    let labels = new Set(['Task Details', '작업 디테일', 'Queue', '대기열']);
+    for (let elem of doc.querySelectorAll('div, span, h1, h2, h3, h4, h5, h6')) {
+        let text = (elem.textContent || '').trim();
+        if (!labels.has(text)) {
+            continue;
+        }
+        let panel = elem.closest('.panel, .p-panel, .sidebar-item-panel, .sidebar-panel, [role="dialog"], section, article, div');
+        if (panel && !panel.dataset.swarmTaskHidden) {
+            panel.dataset.swarmTaskHidden = 'true';
+            panel.style.display = 'none';
+        }
+    }
+}
+
+function comfyEnsureSwarmTaskPanel() {
+    let holder = getRequiredElementById('comfy_workflow_frameholder');
+    holder.style.position = 'relative';
+    if (comfySwarmTaskPanel && comfySwarmTaskPanel.isConnected) {
+        return comfySwarmTaskPanel;
+    }
+    let panel = document.createElement('div');
+    panel.className = 'swarm-comfy-task-panel';
+    panel.innerHTML = `
+        <div class="swarm-comfy-task-header">
+            <div>
+                <div class="swarm-comfy-task-title">작업 디테일</div>
+                <div class="swarm-comfy-task-subtitle">Swarm</div>
+            </div>
+        </div>
+        <div class="swarm-comfy-task-filters">
+            <button type="button" data-filter="all" class="swarm-comfy-task-filter active">모두</button>
+            <button type="button" data-filter="running" class="swarm-comfy-task-filter">진행중</button>
+            <button type="button" data-filter="completed" class="swarm-comfy-task-filter">완료됨</button>
+        </div>
+        <div class="swarm-comfy-task-list">
+            <div class="swarm-comfy-task-empty">작업을 기다리는 중...</div>
+        </div>
+    `;
+    panel.querySelectorAll('.swarm-comfy-task-filter').forEach(button => {
+        button.onclick = () => {
+            comfySwarmTaskFilter = button.dataset.filter;
+            panel.querySelectorAll('.swarm-comfy-task-filter').forEach(b => b.classList.toggle('active', b === button));
+            comfyRefreshSwarmTaskPanel();
+        };
+    });
+    holder.appendChild(panel);
+    comfySwarmTaskPanel = panel;
+    return panel;
+}
+
+function comfyRenderSwarmTasks(tasks) {
+    let panel = comfyEnsureSwarmTaskPanel();
+    let list = panel.querySelector('.swarm-comfy-task-list');
+    let filtered = (tasks || []).filter(task => comfySwarmTaskFilter == 'all' || task.status == comfySwarmTaskFilter);
+    if (!filtered.length) {
+        list.innerHTML = `<div class="swarm-comfy-task-empty">현재 사용자 작업이 없습니다.</div>`;
+        return;
+    }
+    list.innerHTML = '';
+    for (let task of filtered) {
+        let result = task.results?.[0];
+        let pct = task.progress ? Math.round(task.progress * 100) : 0;
+        let card = document.createElement('div');
+        card.className = 'swarm-comfy-task-card';
+        let thumb = result?.preview_url
+            ? `<img class="swarm-comfy-task-thumb" src="${escapeHtml(result.preview_url)}" alt="">`
+            : `<div class="swarm-comfy-task-thumb swarm-comfy-task-thumb-empty">${comfyTaskStatusLabel(task.status)}</div>`;
+        let progressText = task.max ? `${task.value || 0}/${task.max || 0} (${pct}%)` : '';
+        let actions = '';
+        if (result?.url) {
+            actions += `<button type="button" class="swarm-comfy-task-action swarm-open-preview">미리보기</button>`;
+            actions += `<a class="swarm-comfy-task-action" href="${escapeHtml(result.url)}" download>다운로드</a>`;
+        }
+        card.innerHTML = `
+            <div class="swarm-comfy-task-main">
+                ${thumb}
+                <div class="swarm-comfy-task-meta">
+                    <div class="swarm-comfy-task-status">${comfyTaskStatusLabel(task.status)}</div>
+                    <div class="swarm-comfy-task-id">${escapeHtml((task.prompt_id || '').slice(0, 28))}</div>
+                    <div class="swarm-comfy-task-progressbar"><div class="swarm-comfy-task-progressfill" style="width:${pct}%"></div></div>
+                    <div class="swarm-comfy-task-progresslabel">${escapeHtml(progressText)}</div>
+                    ${task.error ? `<div class="swarm-comfy-task-error">${escapeHtml(task.error)}</div>` : ''}
+                    ${actions ? `<div class="swarm-comfy-task-actions">${actions}</div>` : ''}
+                </div>
+            </div>
+        `;
+        let previewButton = card.querySelector('.swarm-open-preview');
+        if (previewButton && result?.url) {
+            previewButton.onclick = () => imageFullView.showImage(result.url, JSON.stringify({
+                source: 'comfy_workflow',
+                prompt_id: task.prompt_id,
+                filename: result.filename || ''
+            }), 'history');
+        }
+        list.appendChild(card);
+    }
+}
+
+function comfyRefreshSwarmTaskPanel() {
+    if (!hasComfyLoaded) {
+        return;
+    }
+    comfyEnsureSwarmTaskPanel();
+    comfyHideNativeTaskPanel();
+    getJsonDirect('ComfyBackendDirect/swarm/session_jobs', (_, data) => {
+        comfyRenderSwarmTasks(data?.tasks || []);
+    }, () => comfyRenderSwarmTasks([]));
+}
+
+function comfyStartSwarmTaskPolling() {
+    if (comfySwarmTaskPollInterval) {
+        return;
+    }
+    comfyRefreshSwarmTaskPanel();
+    comfySwarmTaskPollInterval = setInterval(() => comfyRefreshSwarmTaskPanel(), 1200);
+}
 
 function comfyEnsureBrowserSessionKey() {
     let existing = getCookie('comfy_session_key');
@@ -354,13 +487,18 @@ function comfyOnLoadCallback() {
             }
             comfyHideSharedUiPanels();
             comfyFixMenuLocation();
+            comfyStartSwarmTaskPolling();
             if (api && !api.swarmHasGallerySyncHooks) {
                 api.addEventListener('executed', (event) => {
                     if (event?.detail?.output) {
                         comfyScheduleHistorySync();
+                        comfyRefreshSwarmTaskPanel();
                     }
                 });
-                api.addEventListener('execution_success', () => comfyScheduleHistorySync());
+                api.addEventListener('execution_success', () => {
+                    comfyScheduleHistorySync();
+                    comfyRefreshSwarmTaskPanel();
+                });
                 api.swarmHasGallerySyncHooks = true;
             }
             clearInterval(comfyRefreshControlInterval);
