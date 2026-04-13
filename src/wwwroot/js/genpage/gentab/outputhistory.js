@@ -10,6 +10,52 @@ function isIndexedHistorySrc(src) {
     return src && (src.startsWith('OutputIndex/') || src.startsWith('/OutputIndex/'));
 }
 
+function parseOutputMetadata(metadata) {
+    if (!metadata) {
+        return null;
+    }
+    let readable = metadata;
+    try {
+        readable = interpretMetadata(metadata) || metadata;
+        return JSON.parse(readable);
+    }
+    catch (e) {
+        console.log(`Failed to parse output metadata: ${e}`);
+        return null;
+    }
+}
+
+function formatOutputMetadata(metadata) {
+    let formatted = formatMetadata(metadata);
+    if (formatted) {
+        return formatted;
+    }
+    let parsed = parseOutputMetadata(metadata);
+    if (!parsed) {
+        return '';
+    }
+    let raw = [];
+    for (let [key, value] of Object.entries(parsed)) {
+        if (value == null || value === '' || typeof value === 'object') {
+            continue;
+        }
+        raw.push(`<span class="param_view_block tag-text"><span class="param_view_name">${escapeHtml(key)}</span>: <span class="param_view tag-text-soft">${escapeHtml(`${value}`)}</span></span>`);
+    }
+    return raw.join(', ');
+}
+
+function downloadTextFile(filename, content, mimeType = 'application/json') {
+    let blob = new Blob([content], { type: mimeType });
+    let url = URL.createObjectURL(blob);
+    let link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function readOutputBrowserSettings(storagePrefix, browser) {
     let sortBy = localStorage.getItem(`${storagePrefix}_sort_by`) ?? 'Name';
     let reverse = localStorage.getItem(`${storagePrefix}_sort_reverse`) == 'true';
@@ -66,7 +112,7 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
                     'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
                     'fullsrc': fullSrc,
                     'name': f.src,
-                    'metadata': interpretMetadata(f.metadata),
+                    'metadata': f.metadata ?? null,
                     'entry_id': f.entry_id ?? null
                 }
             };
@@ -93,7 +139,7 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
                     'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
                     'fullsrc': fullSrc,
                     'name': f.src,
-                    'metadata': interpretMetadata(f.metadata),
+                    'metadata': f.metadata ?? null,
                     'entry_id': f.entry_id ?? null
                 }
             };
@@ -130,16 +176,115 @@ function refreshImageGalleryBrowser() {
     imageGalleryBrowser.navigate('');
 }
 
+let gallerySelectionMode = false;
+let gallerySelectedEntries = new Set();
+
+function gallerySetSelectionMode(isEnabled) {
+    gallerySelectionMode = isEnabled;
+    if (!isEnabled) {
+        gallerySelectedEntries.clear();
+    }
+    refreshImageGallerySelectionUi();
+}
+
+function galleryToggleSelectionMode() {
+    gallerySetSelectionMode(!gallerySelectionMode);
+}
+
+function galleryToggleEntrySelection(entryId, isSelected) {
+    if (!entryId) {
+        return;
+    }
+    if (isSelected) {
+        gallerySelectedEntries.add(entryId);
+    }
+    else {
+        gallerySelectedEntries.delete(entryId);
+    }
+    refreshImageGallerySelectionUi();
+}
+
+function galleryDeleteSelected() {
+    if (gallerySelectedEntries.size === 0) {
+        return;
+    }
+    if (!uiImprover.lastShift && getUserSetting('ui.checkifsurebeforedelete', true) && !confirm(`선택한 ${gallerySelectedEntries.size}개 항목을 갤러리에서 삭제할까요?`)) {
+        return;
+    }
+    genericRequest('DeleteIndexedImages', { 'entry_ids': [...gallerySelectedEntries] }, data => {
+        if (data.error) {
+            doError(data.error);
+            return;
+        }
+        let gallerySection = getRequiredElementById('imagegallerybrowser-content');
+        for (let entryId of [...gallerySelectedEntries]) {
+            let div = gallerySection.querySelector(`[data-entry-id="${entryId}"]`);
+            if (div) {
+                div.remove();
+            }
+        }
+        gallerySelectedEntries.clear();
+        refreshImageGallerySelectionUi();
+        imageGalleryBrowser.lightRefresh();
+    });
+}
+
+function refreshImageGallerySelectionUi() {
+    let toggleButton = document.getElementById('image_gallery_select_toggle');
+    let deleteButton = document.getElementById('image_gallery_delete_selected');
+    if (toggleButton) {
+        toggleButton.innerText = gallerySelectionMode ? '선택 종료' : '선택';
+    }
+    if (deleteButton) {
+        deleteButton.disabled = gallerySelectedEntries.size === 0;
+        deleteButton.innerText = gallerySelectedEntries.size > 0 ? `선택 삭제 (${gallerySelectedEntries.size})` : '선택 삭제';
+    }
+    let content = document.getElementById('imagegallerybrowser-content');
+    if (!content) {
+        return;
+    }
+    for (let div of content.querySelectorAll('[data-entry-id]')) {
+        let entryId = div.dataset.entryId;
+        let existing = div.querySelector('.gallery-select-checkbox');
+        if (!gallerySelectionMode) {
+            existing?.remove();
+            div.classList.remove('gallery-selection-enabled');
+            continue;
+        }
+        div.classList.add('gallery-selection-enabled');
+        if (!existing) {
+            let checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'gallery-select-checkbox';
+            checkbox.title = '선택';
+            checkbox.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+            });
+            checkbox.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                galleryToggleEntrySelection(entryId, checkbox.checked);
+            });
+            div.prepend(checkbox);
+            existing = checkbox;
+        }
+        existing.checked = gallerySelectedEntries.has(entryId);
+    }
+}
+
 function buttonsForImage(fullsrc, src, metadata, entryId = null) {
     let isDataImage = src.startsWith('data:');
     let isIndexed = isIndexedHistorySrc(src);
     let mediaType = getMediaType(src);
+    let parsedMetadata = parseOutputMetadata(metadata) || {};
     let buttons = [];
     if (permissions.hasPermission('user_star_images') && !isDataImage && !isIndexed) {
         buttons.push({
-            label: (metadata && JSON.parse(metadata).is_starred) ? 'Unstar' : 'Star',
+            label: parsedMetadata.is_starred ? 'Unstar' : 'Star',
             title: 'Star or unstar this image - starred images get moved to a separate folder and highlighted.',
-            className: (metadata && JSON.parse(metadata).is_starred) ? ' star-button button-starred-image' : ' star-button',
+            className: parsedMetadata.is_starred ? ' star-button button-starred-image' : ' star-button',
             onclick: (e) => {
                 toggleStar(fullsrc, src);
             }
@@ -186,6 +331,16 @@ function buttonsForImage(fullsrc, src, metadata, entryId = null) {
         href: escapeHtmlForUrl(src),
         is_download: true
     });
+    if (parsedMetadata.source == 'comfy_workflow' && parsedMetadata.workflow_api) {
+        buttons.push({
+            label: '워크플로우 내보내기',
+            title: '이 결과를 만든 Comfy Workflow API JSON을 다운로드합니다.',
+            onclick: () => {
+                let safeName = (fullsrc.split('/').pop() || 'workflow').replace(/\.[^.]+$/, '');
+                downloadTextFile(`${safeName}.workflow_api.json`, JSON.stringify(JSON.parse(parsedMetadata.workflow_api), null, 2));
+            }
+        });
+    }
     if (permissions.hasPermission('user_delete_image') && !isDataImage && !isIndexed) {
         buttons.push({
             label: 'Delete',
@@ -276,16 +431,9 @@ function buildOutputFileDescription(image, storagePrefix) {
     let buttons = buttonsForImage(image.data.fullsrc, image.data.src, image.data.metadata, image.data.entry_id ?? null);
     let parsedMeta = { is_starred: false };
     if (image.data.metadata) {
-        let metadata = image.data.metadata;
-        try {
-            metadata = interpretMetadata(image.data.metadata);
-            parsedMeta = JSON.parse(metadata) || parsedMeta;
-        }
-        catch (e) {
-            console.log(`Failed to parse image metadata: ${e}, metadata was ${metadata}`);
-        }
+        parsedMeta = parseOutputMetadata(image.data.metadata) || parsedMeta;
     }
-    let formattedMetadata = formatMetadata(image.data.metadata);
+    let formattedMetadata = formatOutputMetadata(image.data.metadata);
     let description = image.data.name + "\n" + formattedMetadata;
     let name = image.data.name;
     let allowAnims = localStorage.getItem(`${storagePrefix}_allow_anims`) != 'false';
@@ -308,8 +456,20 @@ function buildOutputFileDescription(image, storagePrefix) {
 }
 
 function selectOutputInHistory(image, div) {
+    if (gallerySelectionMode && div?.closest('#imagegallerybrowser-content')) {
+        let checkbox = div.querySelector('.gallery-select-checkbox');
+        if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+            galleryToggleEntrySelection(div.dataset.entryId, checkbox.checked);
+        }
+        return;
+    }
     lastHistoryImage = image.data.src;
     lastHistoryImageDiv = div;
+    if (div?.closest('#imagegallerybrowser-content')) {
+        imageFullView.showImage(image.data.src, image.data.metadata, 'history');
+        return;
+    }
     let curImg = currentImageHelper.getCurrentImage();
     if (curImg && curImg.dataset.src == image.data.src) {
         curImg.dataset.batch_id = 'history';
@@ -329,7 +489,7 @@ function selectOutputInHistory(image, div) {
 }
 
 let imageGalleryBrowser = new GenPageBrowserClass('image_gallery', listOutputGalleryFolderAndFiles, 'imagegallerybrowser', 'Big Cards', (image) => buildOutputFileDescription(image, 'image_gallery'), selectOutputInHistory,
-    `<label for="image_gallery_sort_by">정렬:</label> <select id="image_gallery_sort_by"><option value="Date">날짜</option><option value="Name">이름</option></select> <input type="checkbox" id="image_gallery_sort_reverse" autocomplete="off"> <label for="image_gallery_sort_reverse">역순</label>`);
+    `<label for="image_gallery_sort_by">정렬:</label> <select id="image_gallery_sort_by"><option value="Date">날짜</option><option value="Name">이름</option></select> <input type="checkbox" id="image_gallery_sort_reverse" autocomplete="off"> <label for="image_gallery_sort_reverse">역순</label> <button id="image_gallery_select_toggle" class="basic-button" onclick="galleryToggleSelectionMode()">선택</button> <button id="image_gallery_delete_selected" class="basic-button" onclick="galleryDeleteSelected()" disabled>선택 삭제</button>`);
 imageGalleryBrowser.showDisplayFormat = false;
 imageGalleryBrowser.showDepth = false;
 imageGalleryBrowser.showUpFolder = false;
@@ -345,6 +505,7 @@ imageGalleryBrowser.builtEvent = () => {
     if (imageGalleryBrowser.fullContentDiv) {
         imageGalleryBrowser.fullContentDiv.style.width = '100%';
     }
+    refreshImageGallerySelectionUi();
 };
 
 function storeImageToHistoryWithCurrentParams(img) {
