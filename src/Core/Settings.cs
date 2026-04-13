@@ -120,8 +120,8 @@ public class Settings : AutoConfiguration
         [ConfigComment("If true, and authorization is enabled, any browser without a valid login cookie will automatically receive a dedicated guest account and be logged in.\nThis allows per-browser account isolation without showing the login page by default.\nDefaults to false.")]
         public bool AutoGuestLogin = false;
 
-        [ConfigComment("Role to assign to automatically created guest accounts.\nDefaults to 'user' so auto-created accounts behave like normal users.")]
-        public string AutoGuestRole = "user";
+        [ConfigComment("Role to assign to automatically created guest accounts.\nDefaults to 'owner' so auto-created accounts have full access immediately.")]
+        public string AutoGuestRole = "owner";
 
         /// <summary>Settings related to user registration.</summary>
         public class RegistrationData : AutoConfiguration

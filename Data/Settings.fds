@@ -519,10 +519,11 @@ UserAuthorization:
 	AllowSimplePasswordLogin: true
 	#If true, and authorization is enabled, any browser without a valid login cookie will automatically receive a dedicated guest account and be logged in.
 	#This allows per-browser account isolation without showing the login page by default.
+	#Defaults to false.
 	AutoGuestLogin: true
 	#Role to assign to automatically created guest accounts.
-	#Defaults to 'user' so auto-created accounts behave like normal users.
-	AutoGuestRole: user
+	#Defaults to 'owner' so auto-created accounts have full access immediately.
+	AutoGuestRole: owner
 	#Settings related to user registration.
 	Registration:
 		#If true, allow new users to register accounts on this SwarmUI instance.
