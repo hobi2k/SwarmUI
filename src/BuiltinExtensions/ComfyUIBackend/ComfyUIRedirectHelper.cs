@@ -283,11 +283,98 @@ public class ComfyUIRedirectHelper
 
     public static JArray GetTasksJsonForUser(User swarmUser)
     {
-        if (swarmUser is null || !SwarmTasksByUser.TryGetValue(swarmUser.UserID, out ConcurrentDictionary<string, SwarmTaskRecord> tasks))
+        if (swarmUser is null)
         {
             return [];
         }
-        return new JArray(tasks.Values
+        Dictionary<string, SwarmTaskRecord> mergedTasks = [];
+        if (SwarmTasksByUser.TryGetValue(swarmUser.UserID, out ConcurrentDictionary<string, SwarmTaskRecord> tasks))
+        {
+            foreach ((string promptId, SwarmTaskRecord task) in tasks)
+            {
+                mergedTasks[promptId] = new SwarmTaskRecord()
+                {
+                    PromptId = task.PromptId,
+                    UserId = task.UserId,
+                    Status = task.Status,
+                    CreatedAt = task.CreatedAt,
+                    UpdatedAt = task.UpdatedAt,
+                    Progress = task.Progress,
+                    Value = task.Value,
+                    Max = task.Max,
+                    NodeId = task.NodeId,
+                    Error = task.Error,
+                    WorkflowApi = task.WorkflowApi,
+                    Results = [.. task.Results.Select(r => new SwarmTaskResult()
+                    {
+                        Url = r.Url,
+                        PreviewUrl = r.PreviewUrl,
+                        Filename = r.Filename,
+                        Collection = r.Collection
+                    })]
+                };
+            }
+        }
+        List<UserOutputHistoryIndex.OutputEntry> outputEntries;
+        lock (Program.Sessions.DBLock)
+        {
+            outputEntries = [.. Program.Sessions.OutputHistoryEntries.Find(e => e.UserID == swarmUser.UserID)];
+        }
+        foreach (UserOutputHistoryIndex.OutputEntry entry in outputEntries.OrderByDescending(e => e.CreatedAt))
+        {
+            if (string.IsNullOrWhiteSpace(entry.Metadata))
+            {
+                continue;
+            }
+            JObject metadata;
+            try
+            {
+                metadata = entry.Metadata.ParseToJson();
+            }
+            catch
+            {
+                continue;
+            }
+            if (metadata["source"]?.ToString() != "comfy_workflow")
+            {
+                continue;
+            }
+            string promptId = metadata["prompt_id"]?.ToString();
+            if (string.IsNullOrWhiteSpace(promptId))
+            {
+                continue;
+            }
+            if (!mergedTasks.TryGetValue(promptId, out SwarmTaskRecord task))
+            {
+                task = new SwarmTaskRecord()
+                {
+                    PromptId = promptId,
+                    UserId = swarmUser.UserID,
+                    Status = "completed",
+                    Progress = 1,
+                    CreatedAt = entry.CreatedAt * 1000,
+                    UpdatedAt = entry.CreatedAt * 1000
+                };
+                mergedTasks[promptId] = task;
+            }
+            task.WorkflowApi ??= metadata["workflow_api"]?.ToString();
+            if (task.Results.Count == 0)
+            {
+                string url = entry.WebPath;
+                string previewUrl = string.IsNullOrWhiteSpace(url) ? null : (url.Contains('?') ? $"{url}&preview=true" : $"{url}?preview=true");
+                task.Results.Add(new SwarmTaskResult()
+                {
+                    Url = url,
+                    PreviewUrl = previewUrl,
+                    Filename = entry.DisplayPath?.AfterLast('/') ?? entry.DisplayPath,
+                    Collection = metadata["collection"]?.ToString()
+                });
+                task.Status = "completed";
+                task.Progress = 1;
+                task.UpdatedAt = Math.Max(task.UpdatedAt, entry.CreatedAt * 1000);
+            }
+        }
+        return new JArray(mergedTasks.Values
             .OrderByDescending(t => t.UpdatedAt)
             .Take(100)
             .Select(t => new JObject()
