@@ -56,6 +56,16 @@ function downloadTextFile(filename, content, mimeType = 'application/json') {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function normalizeGalleryItemSrc(src) {
+    if (!src) {
+        return src;
+    }
+    if (src.startsWith('OutputIndex/')) {
+        return `/${src}`;
+    }
+    return src;
+}
+
 function readOutputBrowserSettings(storagePrefix, browser) {
     let sortBy = localStorage.getItem(`${storagePrefix}_sort_by`) ?? 'Name';
     let reverse = localStorage.getItem(`${storagePrefix}_sort_reverse`) == 'true';
@@ -109,7 +119,7 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
             return {
                 'name': fullSrc,
                 'data': {
-                    'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
+                    'src': normalizeGalleryItemSrc(f.url ?? `${getImageOutPrefix()}/${fullSrc}`),
                     'fullsrc': fullSrc,
                     'name': f.src,
                     'metadata': f.metadata ?? null,
@@ -136,7 +146,7 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
             return {
                 'name': fullSrc,
                 'data': {
-                    'src': f.url ?? `${getImageOutPrefix()}/${fullSrc}`,
+                    'src': normalizeGalleryItemSrc(f.url ?? `${getImageOutPrefix()}/${fullSrc}`),
                     'fullsrc': fullSrc,
                     'name': f.src,
                     'metadata': f.metadata ?? null,
