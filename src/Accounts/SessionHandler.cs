@@ -81,6 +81,18 @@ public class SessionHandler
     /// <summary>Matcher for chars allowed in a username.</summary>
     public static AsciiMatcher UsernameValidator = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "_");
 
+    /// <summary>Returns whether a user ID belongs to an auto-created guest account.</summary>
+    public static bool IsAutoGuestUserId(string userId)
+    {
+        return userId?.StartsWith("autoguest_", StringComparison.OrdinalIgnoreCase) ?? false;
+    }
+
+    /// <summary>Returns whether a user ID is one of the internal non-human accounts.</summary>
+    public static bool IsInternalUserId(string userId)
+    {
+        return string.IsNullOrWhiteSpace(userId) || userId == LocalUserID || userId.StartsWith("__", StringComparison.Ordinal);
+    }
+
     /// <summary>Saves persistent data to file.</summary>
     public void Save()
     {
@@ -314,6 +326,10 @@ public class SessionHandler
         Roles["owner"].Data.PermissionFlags.Add("*");
         ApplyDefaultPermissions();
         GenericSharedUser = GetUser("__shared");
+        if (Program.ServerSettings.UserAuthorization.AuthorizationRequired && !Program.ServerSettings.UserAuthorization.AutoGuestLogin)
+        {
+            PurgeAutoGuestUsers();
+        }
         Utilities.RunCheckedTask(async () =>
         {
             try
@@ -463,6 +479,15 @@ public class SessionHandler
         }
     }
 
+    /// <summary>Returns whether there is at least one real user account configured.</summary>
+    public bool HasAnyRegisteredUsers()
+    {
+        lock (DBLock)
+        {
+            return UserDatabase.FindAll().Any(u => !IsInternalUserId(u.ID) && !IsAutoGuestUserId(u.ID));
+        }
+    }
+
     /// <summary>Tries to get the session for an id.</summary>
     /// <returns><see cref="true"/> if found, otherwise <see cref="false"/>.</returns>
     public bool TryGetSession(string id, out Session session)
@@ -524,6 +549,7 @@ public class SessionHandler
             {
                 RemoveSession(userSess);
             }
+            LoginSessions.DeleteMany(s => s.UserID == user.UserID);
             if (!string.IsNullOrWhiteSpace(user.Data.OAuthEmail))
             {
                 UserOAuthLookupDB.Delete(user.Data.OAuthEmail);
@@ -533,6 +559,49 @@ public class SessionHandler
             UserDatabase.Delete(user.UserID);
             Users.TryRemove(user.UserID, out _);
         }
+    }
+
+    /// <summary>Deletes all auto-created guest accounts and their local persisted artifacts.</summary>
+    public void PurgeAutoGuestUsers()
+    {
+        List<string> autoGuestIds;
+        lock (DBLock)
+        {
+            autoGuestIds = [.. UserDatabase.FindAll().Select(u => u.ID).Where(IsAutoGuestUserId)];
+        }
+        if (autoGuestIds.Count == 0)
+        {
+            return;
+        }
+        foreach (string userId in autoGuestIds)
+        {
+            User user = GetUser(userId, false);
+            if (user is not null)
+            {
+                RemoveUser(user);
+            }
+            lock (DBLock)
+            {
+                OutputHistoryEntries.DeleteMany(e => e.UserID == userId);
+                LoginSessions.DeleteMany(s => s.UserID == userId);
+            }
+            if (Program.ServerSettings.Paths.AppendUserNameToOutputPath)
+            {
+                string outputRoot = $"{Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, Program.ServerSettings.Paths.OutputPath).TrimEnd('/', '\\')}/{userId}";
+                try
+                {
+                    if (Directory.Exists(outputRoot))
+                    {
+                        Directory.Delete(outputRoot, true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logs.Warning($"Failed to delete auto guest output folder '{outputRoot}': {ex.Message}");
+                }
+            }
+        }
+        Logs.Info($"Purged {autoGuestIds.Count} auto-created guest account(s).");
     }
 
     private volatile bool HasShutdown;

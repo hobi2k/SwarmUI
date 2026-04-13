@@ -14,6 +14,7 @@ class RegisterHandler {
         this.errorInvalidInput = translatable("Invalid input, such as unreasonable or very long values. Please check your inputs and try again.");
         this.errorRateLimit = translatable("Registration failed (ratelimit reached), please wait a minute before trying again.");
         this.errorUsernameAlreadyExists = translatable("Username already exists (or is reserved). Note that usernames should generally be A-Z plaintext. Please choose a different username.");
+        this.errorRegistrationDisabled = translatable("Registration is not currently enabled on this instance.");
         this.errorUnknown = translatable("Registration failed (reason unknown), please check your inputs and try again.\nIf this issue persists, please contact the instance owner.");
         if (!passwordRegistrationEnabled && this.simpleRegisterContainer) {
             this.simpleRegisterContainer.style.display = 'none';
@@ -67,8 +68,8 @@ class RegisterHandler {
             if (data.success) {
                 this.showMessage(this.messageRegisterSuccess.get());
                 setTimeout(() => {
-                    this.registerErrorBlock.innerHTML = `<a href="Login">(Click here if you haven't already been redirected)</a>`;
-                    window.location.href = 'Login';
+                    this.registerErrorBlock.innerHTML = `<a href="./">(Click here if you haven't already been redirected)</a>`;
+                    window.location.href = './';
                 }, 1000);
                 return;
             }
@@ -81,6 +82,9 @@ class RegisterHandler {
             }
             else if (data.error_id == 'username_exists') {
                 this.showError(this.errorUsernameAlreadyExists.get());
+            }
+            else if (data.error_id == 'registration_disabled') {
+                this.showError(this.errorRegistrationDisabled.get());
             }
             else {
                 this.showError(this.errorUnknown.get());
@@ -114,8 +118,8 @@ class RegisterHandler {
             if (data.success) {
                 this.showMessage(this.messageRegisterSuccess.get());
                 setTimeout(() => {
-                    this.registerErrorBlock.innerHTML = `<a href="Login">(Click here if you haven't already been redirected)</a>`;
-                    window.location.href = 'Login';
+                    this.registerErrorBlock.innerHTML = `<a href="./">(Click here if you haven't already been redirected)</a>`;
+                    window.location.href = './';
                 }, 1000);
                 return;
             }
@@ -128,6 +132,9 @@ class RegisterHandler {
             }
             else if (data.error_id == 'username_exists') {
                 this.showError(this.errorUsernameAlreadyExists.get());
+            }
+            else if (data.error_id == 'registration_disabled') {
+                this.showError(this.errorRegistrationDisabled.get());
             }
             else {
                 this.showError(this.errorUnknown.get());

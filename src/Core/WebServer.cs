@@ -207,7 +207,20 @@ public class WebServer
             }
             if (Program.ServerSettings.UserAuthorization.AuthorizationRequired)
             {
-                WebUtil.EnsureValidLoginOrAutoGuest(context);
+                User login = WebUtil.EnsureValidLoginOrAutoGuest(context);
+                string path = context.Request.Path.Value ?? "/";
+                bool isAuthPage = path.Equals("/Login", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/Register", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/GoogleOAuthVerify", StringComparison.OrdinalIgnoreCase);
+                bool isApiCall = path.StartsWith("/API/", StringComparison.OrdinalIgnoreCase);
+                bool isStaticAsset = Path.HasExtension(path);
+                bool isHtmlNavigation = HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method);
+                if (login is null && isHtmlNavigation && !isAuthPage && !isApiCall && !isStaticAsset)
+                {
+                    string target = WebUtil.NeedsInitialOwnerSetup() ? "/Register?setup=1" : "/Login";
+                    context.Response.Redirect(target);
+                    return;
+                }
             }
             await next();
         });

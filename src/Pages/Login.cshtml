@@ -5,9 +5,17 @@
     bool simpleLogin = Program.ServerSettings.UserAuthorization.AllowSimplePasswordLogin;
     bool googleOAuthLogin = Program.ServerSettings.UserAuthorization.OAuth.GoogleOAuth;
     bool manualLogin = WebUtil.IsManualLoginRequested(HttpContext);
+    bool initialSetup = WebUtil.NeedsInitialOwnerSetup();
 }
 @section Header {
     <link rel="stylesheet" href="css/loginpage.css?vary=@Utilities.VaryID" />
+}
+@if (initialSetup)
+{
+    <script>
+        window.location.href = "Register?setup=1";
+    </script>
+    return;
 }
 @if (!manualLogin && WebUtil.HasValidLogin(HttpContext))
 {

@@ -117,7 +117,8 @@ public static class BasicAPIFeatures
             Logs.Warning($"Login attempt from {ip} as {username}, failed due to session creation failure.");
             return new JObject() { ["error_id"] = "internal_error" };
         }
-        context.Response.Cookies.Append("swarm_token", tok, new CookieOptions() { HttpOnly = true, Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax });
+        WebUtil.ClearAuthCookies(context);
+        context.Response.Cookies.Append("swarm_token", tok, new CookieOptions() { HttpOnly = true, Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Path = "/" });
         Logs.Info($"Login attempt from {ip} as {username}, successful.");
         return new JObject() { ["success"] = "true" };
     }
@@ -133,6 +134,14 @@ public static class BasicAPIFeatures
         [API.APIParameter("New registered account username.")] string username,
         [API.APIParameter("New registered account password.")] string password)
     {
+        bool initialSetup = WebUtil.NeedsInitialOwnerSetup();
+        bool registrationAllowed = Program.ServerSettings.UserAuthorization.AuthorizationRequired
+            && Program.ServerSettings.UserAuthorization.Registration.AllowRegistration
+            && Program.ServerSettings.UserAuthorization.Registration.SimplePasswordRegistration;
+        if (!initialSetup && !registrationAllowed)
+        {
+            return new JObject() { ["error_id"] = "registration_disabled" };
+        }
         username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
         string ip = WebUtil.GetIPString(context);
         if (username.Length < 3 || username.Length > 100 || password.Length < 8 || password.Length > 500)
@@ -166,14 +175,28 @@ public static class BasicAPIFeatures
             Logs.Warning($"Register attempt from {ip} as {username}, failed due to reserved username.");
             return new JObject() { ["error_id"] = "username_exists" };
         }
-        user = Program.Sessions.RegisterUser(username, password, Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole, false);
+        string role = initialSetup ? "owner" : Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole;
+        user = Program.Sessions.RegisterUser(username, password, role, false);
         if (user is null)
         {
             Logs.Warning($"Register attempt from {ip} as {username}, failed due to internal registration failure.");
             return new JObject() { ["error_id"] = "registration_failed" };
         }
+        string userAgent = WebUtil.AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
+        (_, string tok) = user.CreateLoginSession(ip, userAgent);
+        if (tok is null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to session creation failure.");
+            return new JObject() { ["error_id"] = "internal_error" };
+        }
+        if (initialSetup)
+        {
+            Program.Sessions.PurgeAutoGuestUsers();
+        }
+        WebUtil.ClearAuthCookies(context);
+        context.Response.Cookies.Append("swarm_token", tok, new CookieOptions() { HttpOnly = true, Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Path = "/" });
         Logs.Info($"Register attempt from {ip} as {username}, successful.");
-        return new JObject() { ["success"] = "true" };
+        return new JObject() { ["success"] = "true", ["initial_setup"] = initialSetup };
     }
 
     [API.APIDescription("Special route to register a new user account via OAuth. Cannot be automated, must be via UI.",
@@ -188,6 +211,14 @@ public static class BasicAPIFeatures
         [API.APIParameter("Tracker key to identify the source OAuth request.")] string oauth_tracker_key,
         [API.APIParameter("OAuth provider type.")] string oauth_type)
     {
+        bool initialSetup = WebUtil.NeedsInitialOwnerSetup();
+        bool registrationAllowed = Program.ServerSettings.UserAuthorization.AuthorizationRequired
+            && Program.ServerSettings.UserAuthorization.Registration.AllowRegistration
+            && Program.ServerSettings.UserAuthorization.Registration.OAuthRegistration;
+        if (!initialSetup && !registrationAllowed)
+        {
+            return new JObject() { ["error_id"] = "registration_disabled" };
+        }
         username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
         string ip = WebUtil.GetIPString(context);
         if (username.Length < 3 || username.Length > 100)
@@ -226,7 +257,8 @@ public static class BasicAPIFeatures
             Logs.Warning($"Register attempt from {ip} as {username}, failed due to invalid OAuth tracker key.");
             return new JObject() { ["error_id"] = "invalid_input" };
         }
-        user = Program.Sessions.RegisterUser(username, null, Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole, false);
+        string role = initialSetup ? "owner" : Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole;
+        user = Program.Sessions.RegisterUser(username, null, role, false);
         if (user is null)
         {
             Logs.Warning($"Register attempt from {ip} as {username}, failed due to internal registration failure.");
@@ -234,8 +266,21 @@ public static class BasicAPIFeatures
         }
         user.SetOAuthEmail(email);
         Program.Sessions.TempAuths.Remove(oauth_tracker_key, out _);
+        string userAgent = WebUtil.AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
+        (_, string tok) = user.CreateLoginSession(ip, userAgent);
+        if (tok is null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to session creation failure.");
+            return new JObject() { ["error_id"] = "internal_error" };
+        }
+        if (initialSetup)
+        {
+            Program.Sessions.PurgeAutoGuestUsers();
+        }
+        WebUtil.ClearAuthCookies(context);
+        context.Response.Cookies.Append("swarm_token", tok, new CookieOptions() { HttpOnly = true, Expires = DateTimeOffset.UtcNow.AddYears(1), SameSite = SameSiteMode.Lax, Path = "/" });
         Logs.Info($"Register attempt from {ip} as {username}, successful.");
-        return new JObject() { ["success"] = "true" };
+        return new JObject() { ["success"] = "true", ["initial_setup"] = initialSetup };
     }
 
     [API.APIDescription("Special route to create a new session ID. Must be called before any other API route. Also returns other fundamental user and server data.\nIntentionally no permission flag required, as permissions are not defined until you create a session.",
@@ -309,7 +354,7 @@ public static class BasicAPIFeatures
                 Program.Sessions.RemoveSession(sess);
             }
         }
-        context.Response.Cookies.Append("swarm_token", "", new CookieOptions() { HttpOnly = true, MaxAge = TimeSpan.FromSeconds(-1), SameSite = SameSiteMode.Lax });
+        WebUtil.ClearAuthCookies(context);
         return new JObject() { ["success"] = "true" };
     }
 

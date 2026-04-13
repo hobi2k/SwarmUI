@@ -6,6 +6,7 @@
     bool oAuthRegister = Program.ServerSettings.UserAuthorization.Registration.OAuthRegistration;
     bool googleOAuthRegister = oAuthRegister && Program.ServerSettings.UserAuthorization.OAuth.GoogleOAuth;
     bool manualLogin = WebUtil.IsManualLoginRequested(HttpContext);
+    bool initialSetup = WebUtil.NeedsInitialOwnerSetup();
 }
 @section Header {
     <link rel="stylesheet" href="css/loginpage.css?vary=@Utilities.VaryID" />
@@ -15,7 +16,7 @@
     <script>window.location.href = "Text2Image";</script>
     return;
 }
-@if (!Program.ServerSettings.UserAuthorization.Registration.AllowRegistration)
+@if (!initialSetup && !Program.ServerSettings.UserAuthorization.Registration.AllowRegistration)
 {
     <script>window.location.href = "Login";</script>
     return;
@@ -25,6 +26,14 @@
     oAuthRegistrationEnabled = false;
     googleOAuthRegistrationEnabled = false;
 </script>
+@if (initialSetup)
+{
+    <script>
+        passwordRegistrationEnabled = true;
+        oAuthRegistrationEnabled = false;
+        googleOAuthRegistrationEnabled = false;
+    </script>
+}
 @if (passwordRegister)
 {
     <script>passwordRegistrationEnabled = true;</script>
@@ -41,10 +50,24 @@
 
 <div class="login-header-container login-container">
     <div class="big-header">
-        <span class="translate">Register an account for</span> SwarmUI: @Program.ServerSettings.UserAuthorization.InstanceTitle
+        @if (initialSetup)
+        {
+            <span class="translate">Create the first owner account for</span> <text>SwarmUI: @Program.ServerSettings.UserAuthorization.InstanceTitle</text>
+        }
+        else
+        {
+            <span class="translate">Register an account for</span> <text>SwarmUI: @Program.ServerSettings.UserAuthorization.InstanceTitle</text>
+        }
     </div>
     <div class="small-header">
-        <span class="translate">Please verify you are on the specific instance of SwarmUI you intend to be, verify the address in the URL is correct. Accounts are not shared between different instances of SwarmUI.</span>
+        @if (initialSetup)
+        {
+            <span class="translate">This instance does not have a real login account yet. Create the first owner account now. Existing auto guest accounts will be cleaned up as part of setup.</span>
+        }
+        else
+        {
+            <span class="translate">Please verify you are on the specific instance of SwarmUI you intend to be, verify the address in the URL is correct. Accounts are not shared between different instances of SwarmUI.</span>
+        }
         @if (passwordRegister)
         {
             <br><span class="translate">For basic registration, create a unique username and password.</span>
@@ -53,7 +76,7 @@
         {
             <br><span class="translate">For Google OAuth registration, click the button below.</span>
         }
-        @if (!passwordRegister && !googleOAuthRegister)
+        @if (!initialSetup && !passwordRegister && !googleOAuthRegister)
         {
             <br>
             <span class="translate">No registration methods are enabled. Please contact the instance owner and ask them to correct this in the server configuration.</span>

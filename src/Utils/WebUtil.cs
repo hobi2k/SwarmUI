@@ -15,6 +15,7 @@ namespace SwarmUI.Utils;
 public static class WebUtil
 {
     public const string AutoLoginUserContextKey = "swarm_auto_login_user";
+    public const string AutoGuestUserCookie = "swarm_autoguest_user";
 
     public static HtmlString Toast(string box_id, string header, string small_side, string content_id, string content, bool show)
     {
@@ -290,7 +291,25 @@ public static class WebUtil
 
     public static bool IsAutoGuestUser(User user)
     {
-        return user?.UserID?.StartsWith("autoguest_", StringComparison.OrdinalIgnoreCase) ?? false;
+        return SessionHandler.IsAutoGuestUserId(user?.UserID);
+    }
+
+    public static bool NeedsInitialOwnerSetup()
+    {
+        return Program.ServerSettings.UserAuthorization.AuthorizationRequired && !Program.Sessions.HasAnyRegisteredUsers();
+    }
+
+    public static void ClearAuthCookies(HttpContext context)
+    {
+        CookieOptions options = new()
+        {
+            HttpOnly = true,
+            MaxAge = TimeSpan.FromSeconds(-1),
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
+        };
+        context.Response.Cookies.Append("swarm_token", "", options);
+        context.Response.Cookies.Append(AutoGuestUserCookie, "", options);
     }
 
     public static void EnsureAutoGuestRole(User user)
@@ -328,6 +347,30 @@ public static class WebUtil
         {
             role = "user";
         }
+        string ip = GetIPString(context);
+        string userAgent = AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
+        if (context.Request.Cookies.TryGetValue(AutoGuestUserCookie, out string knownGuestId) && !string.IsNullOrWhiteSpace(knownGuestId))
+        {
+            User knownGuest = Program.Sessions.GetUser(knownGuestId, false);
+            if (IsAutoGuestUser(knownGuest))
+            {
+                (_, string existingToken) = knownGuest.CreateLoginSession(ip, userAgent);
+                if (existingToken is not null)
+                {
+                    context.Response.Cookies.Append("swarm_token", existingToken, new CookieOptions()
+                    {
+                        HttpOnly = true,
+                        Expires = DateTimeOffset.UtcNow.AddYears(1),
+                        SameSite = SameSiteMode.Lax,
+                        Path = "/"
+                    });
+                    context.Items[AutoLoginUserContextKey] = knownGuest;
+                    EnsureAutoGuestRole(knownGuest);
+                    Logs.Info($"Reused auto guest account '{knownGuest.UserID}' for {ip}.");
+                    return knownGuest;
+                }
+            }
+        }
         User user = null;
         string username = null;
         for (int i = 0; i < 100; i++)
@@ -344,8 +387,6 @@ public static class WebUtil
             Logs.Error("Auto guest login failed: could not create a unique guest account.");
             return null;
         }
-        string ip = GetIPString(context);
-        string userAgent = AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
         (_, string tok) = user.CreateLoginSession(ip, userAgent);
         if (tok is null)
         {
@@ -356,7 +397,15 @@ public static class WebUtil
         {
             HttpOnly = true,
             Expires = DateTimeOffset.UtcNow.AddYears(1),
-            SameSite = SameSiteMode.Lax
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
+        });
+        context.Response.Cookies.Append(AutoGuestUserCookie, user.UserID, new CookieOptions()
+        {
+            HttpOnly = true,
+            Expires = DateTimeOffset.UtcNow.AddYears(1),
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
         });
         context.Items[AutoLoginUserContextKey] = user;
         Logs.Info($"Auto-created and logged in guest account '{username}' for {ip}.");
@@ -438,6 +487,11 @@ public static class WebUtil
             User user = GetUserForSwarmToken(context, parts);
             if (user is not null)
             {
+                if (!Program.ServerSettings.UserAuthorization.AutoGuestLogin && IsAutoGuestUser(user))
+                {
+                    ClearAuthCookies(context);
+                    return null;
+                }
                 EnsureAutoGuestRole(user);
                 context.Items[AutoLoginUserContextKey] = user;
             }
