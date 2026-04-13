@@ -112,10 +112,13 @@ public class ComfyUIRedirectHelper
     {
         if (parsed?["data"] is not JObject dataObj || !dataObj.TryGetValue("prompt_id", out JToken promptIdTok))
         {
-            // prompt_id 없는 이벤트(status 등)는 전역 이벤트이므로 통과
             return true;
         }
-        return IsOwnedPromptId(swarmUser, promptIdTok.ToString());
+        string promptId = promptIdTok.ToString();
+        HashSet<string> owned = GetOwnedPromptIds(swarmUser);
+        bool result = owned.Contains(promptId);
+        Logs.Debug($"[ComfyFilter] type={parsed["type"]} prompt_id={promptId} user={swarmUser?.UserID} owned=[{string.Join(",", owned)}] result={result}");
+        return result;
     }
 
     /// <summary>Comfy queue 응답을 현재 사용자 prompt만 남기도록 필터링한다.</summary>
