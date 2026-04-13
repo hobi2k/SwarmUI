@@ -131,11 +131,16 @@
     z-index: 30;
 }
 
+.swarm-comfy-task-panel-dragging {
+    user-select: none;
+}
+
 .swarm-comfy-task-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 0.85rem 0.95rem 0.35rem;
+    cursor: move;
 }
 
 .swarm-comfy-task-title {

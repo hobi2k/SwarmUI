@@ -26,6 +26,7 @@ let comfyHasTriedToLoad = false;
 let comfySwarmTaskPanel = null;
 let comfySwarmTaskFilter = 'all';
 let comfySwarmTaskPollInterval = null;
+let comfySwarmTaskDragState = null;
 
 function comfyTaskStatusLabel(status) {
     if (status == 'running') return '진행중';
@@ -85,6 +86,19 @@ function comfyEnsureSwarmTaskPanel() {
             comfyRefreshSwarmTaskPanel();
         };
     });
+    let header = panel.querySelector('.swarm-comfy-task-header');
+    header.onmousedown = (e) => {
+        if (e.button !== 0) {
+            return;
+        }
+        let rect = panel.getBoundingClientRect();
+        comfySwarmTaskDragState = {
+            offsetX: e.clientX - rect.left,
+            offsetY: e.clientY - rect.top
+        };
+        panel.classList.add('swarm-comfy-task-panel-dragging');
+        e.preventDefault();
+    };
     holder.appendChild(panel);
     comfySwarmTaskPanel = panel;
     return panel;
@@ -93,7 +107,23 @@ function comfyEnsureSwarmTaskPanel() {
 function comfyRenderSwarmTasks(tasks) {
     let panel = comfyEnsureSwarmTaskPanel();
     let list = panel.querySelector('.swarm-comfy-task-list');
-    let filtered = (tasks || []).filter(task => comfySwarmTaskFilter == 'all' || task.status == comfySwarmTaskFilter);
+    let deduped = [];
+    let seen = new Set();
+    for (let task of (tasks || [])) {
+        let result = task.results?.[0];
+        let key = result?.url || result?.filename || task.prompt_id;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        deduped.push(task);
+    }
+    let filtered = deduped.filter(task => {
+        if (comfySwarmTaskFilter == 'running') {
+            return task.status == 'running';
+        }
+        return !!task.results?.length;
+    });
     if (!filtered.length) {
         list.innerHTML = `<div class="swarm-comfy-task-empty">현재 사용자 작업이 없습니다.</div>`;
         return;
@@ -113,6 +143,9 @@ function comfyRenderSwarmTasks(tasks) {
             actions += `<button type="button" class="swarm-comfy-task-action swarm-open-preview">미리보기</button>`;
             actions += `<a class="swarm-comfy-task-action" href="${escapeHtml(result.url)}" download>다운로드</a>`;
         }
+        if (task.workflow_api) {
+            actions += `<button type="button" class="swarm-comfy-task-action swarm-export-workflow">워크플로우 내보내기</button>`;
+        }
         card.innerHTML = `
             <div class="swarm-comfy-task-main">
                 ${thumb}
@@ -127,12 +160,19 @@ function comfyRenderSwarmTasks(tasks) {
             </div>
         `;
         let previewButton = card.querySelector('.swarm-open-preview');
-        if (previewButton && result?.url) {
-            previewButton.onclick = () => imageFullView.showImage(result.url, JSON.stringify({
+        if (previewButton && (result?.preview_url || result?.url)) {
+            previewButton.onclick = () => imageFullView.showImage(result.preview_url || result.url, JSON.stringify({
                 source: 'comfy_workflow',
                 prompt_id: task.prompt_id,
                 filename: result.filename || ''
             }), 'history');
+        }
+        let exportButton = card.querySelector('.swarm-export-workflow');
+        if (exportButton && task.workflow_api) {
+            exportButton.onclick = () => {
+                let safeName = ((result?.filename || task.prompt_id || 'workflow').split('/').pop() || 'workflow').replace(/\.[^.]+$/, '');
+                downloadTextFile(`${safeName}.workflow_api.json`, JSON.stringify(JSON.parse(task.workflow_api), null, 2));
+            };
         }
         list.appendChild(card);
     }
@@ -156,6 +196,28 @@ function comfyStartSwarmTaskPolling() {
     comfyRefreshSwarmTaskPanel();
     comfySwarmTaskPollInterval = setInterval(() => comfyRefreshSwarmTaskPanel(), 1200);
 }
+
+document.addEventListener('mousemove', (e) => {
+    if (!comfySwarmTaskDragState || !comfySwarmTaskPanel) {
+        return;
+    }
+    let holder = getRequiredElementById('comfy_workflow_frameholder');
+    let holderRect = holder.getBoundingClientRect();
+    let maxLeft = Math.max(0, holderRect.width - comfySwarmTaskPanel.offsetWidth);
+    let maxTop = Math.max(0, holderRect.height - comfySwarmTaskPanel.offsetHeight);
+    let nextLeft = Math.min(maxLeft, Math.max(0, e.clientX - holderRect.left - comfySwarmTaskDragState.offsetX));
+    let nextTop = Math.min(maxTop, Math.max(0, e.clientY - holderRect.top - comfySwarmTaskDragState.offsetY));
+    comfySwarmTaskPanel.style.left = `${nextLeft}px`;
+    comfySwarmTaskPanel.style.top = `${nextTop}px`;
+    comfySwarmTaskPanel.style.right = 'auto';
+});
+
+document.addEventListener('mouseup', () => {
+    if (comfySwarmTaskPanel) {
+        comfySwarmTaskPanel.classList.remove('swarm-comfy-task-panel-dragging');
+    }
+    comfySwarmTaskDragState = null;
+});
 
 function comfyEnsureBrowserSessionKey() {
     let existing = getCookie('comfy_session_key');

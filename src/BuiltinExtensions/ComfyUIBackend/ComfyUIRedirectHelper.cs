@@ -42,6 +42,7 @@ public class ComfyUIRedirectHelper
         public int Max { get; set; }
         public string NodeId { get; set; }
         public string Error { get; set; }
+        public string WorkflowApi { get; set; }
         public List<SwarmTaskResult> Results { get; set; } = [];
     }
 
@@ -174,7 +175,7 @@ public class ComfyUIRedirectHelper
         });
     }
 
-    public static void SetTaskQueued(User swarmUser, string promptId)
+    public static void SetTaskQueued(User swarmUser, string promptId, JObject workflowApi = null)
     {
         SwarmTaskRecord task = GetOrCreateTask(swarmUser, promptId);
         if (task is null)
@@ -183,6 +184,10 @@ public class ComfyUIRedirectHelper
         }
         task.Status = "queued";
         task.Error = null;
+        if (workflowApi is not null)
+        {
+            task.WorkflowApi = workflowApi.ToString(Newtonsoft.Json.Formatting.None);
+        }
         task.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
@@ -296,6 +301,7 @@ public class ComfyUIRedirectHelper
                 ["max"] = t.Max,
                 ["node_id"] = t.NodeId,
                 ["error"] = t.Error,
+                ["workflow_api"] = t.WorkflowApi,
                 ["results"] = new JArray(t.Results.Select(r => new JObject()
                 {
                     ["url"] = r.Url,
@@ -899,7 +905,7 @@ public class ComfyUIRedirectHelper
                                 {
                                     (_, JObject responseJson) = user.SendPromptQueue(prompt);
                                     user.RegisterOwnedPromptId(responseJson["prompt_id"]?.ToString());
-                                    SetTaskQueued(swarmUser, responseJson["prompt_id"]?.ToString());
+                                    SetTaskQueued(swarmUser, responseJson["prompt_id"]?.ToString(), prompt);
                                     response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(responseJson) };
                                     redirected = true;
                                     Logs.Info($"Sent Comfy backend direct prompt requested to general queue (from user {swarmUser.UserID})");
@@ -911,7 +917,7 @@ public class ComfyUIRedirectHelper
                                     string instancePrefixedId = $"swarm-{InstanceId}-{Guid.NewGuid():N}";
                                     parsed["prompt_id"] = instancePrefixedId;
                                     user.RegisterOwnedPromptId(instancePrefixedId);
-                                    SetTaskQueued(swarmUser, instancePrefixedId);
+                                    SetTaskQueued(swarmUser, instancePrefixedId, prompt);
                                     ComfyClientData client = await user.SendPromptRegular(prompt, givePostError);
                                     if (client?.SID is not null)
                                     {
@@ -1189,7 +1195,10 @@ public class ComfyUIRedirectHelper
                     // promptComfyUser는 위 /prompt 처리 블록에서 설정된다. 없으면 첫 번째 ComfyUser로 폴백한다.
                     ComfyUser targetComfyUser = promptComfyUser ?? GetComfyUsersForSwarmUser(swarmUser).FirstOrDefault();
                     targetComfyUser?.RegisterOwnedPromptId(pid);
-                    SetTaskQueued(swarmUser, pid);
+                    if (!string.IsNullOrWhiteSpace(pid) && !SwarmTasksByUser.GetValueOrDefault(swarmUser.UserID, new()).ContainsKey(pid))
+                    {
+                        SetTaskQueued(swarmUser, pid);
+                    }
                     Logs.Debug($"[QFilter] prompt 등록: pid={pid} masterSID={targetComfyUser?.MasterSID ?? "null"} promptComfyUser_was_null={promptComfyUser is null}");
                 }
                 await context.Response.WriteAsync(responseJson.ToString(Newtonsoft.Json.Formatting.None));
