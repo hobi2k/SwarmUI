@@ -871,7 +871,12 @@ public class ComfyUIBackendExtension : Extension
         }
         await Task.WhenAll(tasks); // Intentional force order for Comfy folders to be before nodes
         tasks = [];
-        foreach (string folder in Directory.EnumerateDirectories($"{FilePath}DLNodes"))
+        string dlNodesPath = $"{FilePath}DLNodes";
+        if (!Directory.Exists(dlNodesPath))
+        {
+            return;
+        }
+        foreach (string folder in Directory.EnumerateDirectories(dlNodesPath))
         {
             tasks.Add(Utilities.RunCheckedTask(async () =>
             {

@@ -123,6 +123,12 @@ public class Program
         Utilities.LoadTimer timer = new();
         AssemblyLoadContext.Default.Unloading += (_) => Shutdown();
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true; // 런타임 기본 강제종료를 막고 직접 처리
+            Logs.Info("Ctrl+C 감지 - 종료 중...");
+            Shutdown();
+        };
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             Logs.Debug($"Unhandled exception: {e.ExceptionObject}");
@@ -567,7 +573,7 @@ public class Program
         }
         HasShutdown = true;
         Task waitShutdown = WebhookManager.SendWebhook("Shutdown", ServerSettings.WebHooks.ServerShutdownWebhook, ServerSettings.WebHooks.ServerShutdownWebhookData);
-        Task.WaitAny(waitShutdown, Task.Delay(TimeSpan.FromMinutes(2)));
+        Task.WaitAny(waitShutdown, Task.Delay(TimeSpan.FromSeconds(5)));
         if (code != 0)
         {
             Logs.Debug($"Shutdown requested with non-zero exit code {code}.");

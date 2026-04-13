@@ -34,6 +34,7 @@ public static class T2IAPI
         API.RegisterAPICall(ToggleImageStarred, true, Permissions.UserStarImages);
         API.RegisterAPICall(OpenImageFolder, true, Permissions.LocalImageFolder);
         API.RegisterAPICall(DeleteImage, true, Permissions.UserDeleteImage);
+        API.RegisterAPICall(DeleteIndexedImage, true, Permissions.UserDeleteImage);
         API.RegisterAPICall(ListT2IParams, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(TriggerRefresh, true, Permissions.FundamentalGenerateTabAccess); // Intentionally weird perm here: internal check for readonly vs true refresh
     }
@@ -827,6 +828,22 @@ public static class T2IAPI
             }
         }
         OutputMetadataTracker.RemoveMetadataFor(path);
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("갤러리 인덱스 항목과 실제 파일을 함께 삭제한다.", "\"success\": true")]
+    public static async Task<JObject> DeleteIndexedImage(Session session,
+        [API.APIParameter("삭제할 항목 ID다.")] string entry_id)
+    {
+        if (string.IsNullOrWhiteSpace(entry_id))
+        {
+            return new JObject() { ["error"] = "entry_id가 비어있습니다." };
+        }
+        bool deleted = UserOutputHistoryIndex.DeleteEntry(session.User, entry_id);
+        if (!deleted)
+        {
+            return new JObject() { ["error"] = "항목을 찾을 수 없거나 삭제 권한이 없습니다." };
+        }
         return new JObject() { ["success"] = true };
     }
 

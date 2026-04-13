@@ -47,6 +47,9 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
 
     public ConcurrentQueue<ReusableSocket> ReusableSockets = new();
 
+    /// <summary>시작 시 ComfyUI history/queue를 한 번만 초기화했는지 추적한다.</summary>
+    public bool HasDoneStartupClear = false;
+
     public string WSID;
 
     public async Task LoadValueSet(double maxMinutes = 1)
@@ -156,6 +159,21 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             await LoadValueSet();
             Status = BackendStatus.RUNNING;
             LoadStatusReport = null;
+            if (!HasDoneStartupClear)
+            {
+                HasDoneStartupClear = true;
+                Logs.Verbose($"Comfy backend {BackendData.ID}: 시작 시 ComfyUI history/queue 초기화 중...");
+                try
+                {
+                    await HttpClient.PostAsync($"{APIAddress}/history", Utilities.JSONContent(new JObject() { ["clear"] = true }), Program.GlobalProgramCancel);
+                    await HttpClient.PostAsync($"{APIAddress}/queue", Utilities.JSONContent(new JObject() { ["clear"] = true }), Program.GlobalProgramCancel);
+                    Logs.Verbose($"Comfy backend {BackendData.ID}: history/queue 초기화 완료.");
+                }
+                catch (Exception ex)
+                {
+                    Logs.Warning($"Comfy backend {BackendData.ID}: 시작 시 history/queue 초기화 실패: {ex.Message}");
+                }
+            }
         }
         catch (Exception e)
         {

@@ -79,8 +79,12 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
 }
 
 function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
+    let sortElem = document.getElementById('image_gallery_sort_by');
+    let sortReverseElem = document.getElementById('image_gallery_sort_reverse');
+    let sortBy = sortElem ? sortElem.value : (localStorage.getItem('image_gallery_sort_by') ?? 'Date');
+    let sortReverse = sortReverseElem ? sortReverseElem.checked : (localStorage.getItem('image_gallery_sort_reverse') == 'true');
     let prefix = path == '' ? '' : (path.endsWith('/') ? path : `${path}/`);
-    genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': 'Date', 'sortReverse': false}, data => {
+    genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': sortReverse}, data => {
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
             return {
@@ -94,8 +98,24 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
                 }
             };
         });
-        mapped.reverse();
         callback(data.folders, mapped);
+        // 정렬 컨트롤이 아직 DOM에 없으면(첫 호출) 생성 후 이벤트 연결
+        if (!sortElem) {
+            let newSortElem = document.getElementById('image_gallery_sort_by');
+            let newSortReverseElem = document.getElementById('image_gallery_sort_reverse');
+            if (newSortElem) {
+                newSortElem.value = sortBy;
+                newSortReverseElem.checked = sortReverse;
+                newSortElem.addEventListener('change', () => {
+                    localStorage.setItem('image_gallery_sort_by', newSortElem.value);
+                    imageGalleryBrowser.lightRefresh();
+                });
+                newSortReverseElem.addEventListener('change', () => {
+                    localStorage.setItem('image_gallery_sort_reverse', newSortReverseElem.checked);
+                    imageGalleryBrowser.lightRefresh();
+                });
+            }
+        }
     });
 }
 
@@ -110,7 +130,7 @@ function refreshImageGalleryBrowser() {
     imageGalleryBrowser.navigate('');
 }
 
-function buttonsForImage(fullsrc, src, metadata) {
+function buttonsForImage(fullsrc, src, metadata, entryId = null) {
     let isDataImage = src.startsWith('data:');
     let isIndexed = isIndexedHistorySrc(src);
     let mediaType = getMediaType(src);
@@ -204,6 +224,40 @@ function buttonsForImage(fullsrc, src, metadata) {
             }
         });
     }
+    if (permissions.hasPermission('user_delete_image') && isIndexed && entryId) {
+        buttons.push({
+            label: 'Delete',
+            title: '갤러리에서 이 항목과 파일을 삭제합니다.',
+            onclick: (e) => {
+                if (!uiImprover.lastShift && getUserSetting('ui.checkifsurebeforedelete', true) && !confirm('갤러리에서 이 이미지를 삭제할까요?\nShift를 누른 채로 클릭하면 확인 창을 건너뜁니다.')) {
+                    return;
+                }
+                let deleteBehavior = getUserSetting('ui.deleteimagebehavior', 'next');
+                let shifted = deleteBehavior == 'nothing' ? false : shiftToNextImagePreview(deleteBehavior == 'next', imageFullView.isOpen());
+                if (!shifted) {
+                    imageFullView.close();
+                }
+                genericRequest('DeleteIndexedImage', {'entry_id': entryId}, data => {
+                    if (data.error) {
+                        doError(data.error);
+                        return;
+                    }
+                    if (e) {
+                        e.remove();
+                    }
+                    let gallerySection = getRequiredElementById('imagegallerybrowser-content');
+                    let div = gallerySection.querySelector(`.image-block[data-name="${fullsrc}"]`);
+                    if (div) {
+                        div.remove();
+                    }
+                    let currentImage = currentImageHelper.getCurrentImage();
+                    if (currentImage && currentImage.dataset.src == src) {
+                        setCurrentImage(null);
+                    }
+                });
+            }
+        });
+    }
     for (let reg of registeredMediaButtons) {
         if (reg.showInHistory && (!reg.mediaTypes || reg.mediaTypes.includes(mediaType))) {
             buttons.push({
@@ -219,7 +273,7 @@ function buttonsForImage(fullsrc, src, metadata) {
 }
 
 function buildOutputFileDescription(image, storagePrefix) {
-    let buttons = buttonsForImage(image.data.fullsrc, image.data.src, image.data.metadata);
+    let buttons = buttonsForImage(image.data.fullsrc, image.data.src, image.data.metadata, image.data.entry_id ?? null);
     let parsedMeta = { is_starred: false };
     if (image.data.metadata) {
         let metadata = image.data.metadata;
@@ -274,7 +328,8 @@ function selectOutputInHistory(image, div) {
     }
 }
 
-let imageGalleryBrowser = new GenPageBrowserClass('image_gallery', listOutputGalleryFolderAndFiles, 'imagegallerybrowser', 'Big Cards', (image) => buildOutputFileDescription(image, 'image_gallery'), selectOutputInHistory, '');
+let imageGalleryBrowser = new GenPageBrowserClass('image_gallery', listOutputGalleryFolderAndFiles, 'imagegallerybrowser', 'Big Cards', (image) => buildOutputFileDescription(image, 'image_gallery'), selectOutputInHistory,
+    `<label for="image_gallery_sort_by">정렬:</label> <select id="image_gallery_sort_by"><option value="Date">날짜</option><option value="Name">이름</option></select> <input type="checkbox" id="image_gallery_sort_reverse" autocomplete="off"> <label for="image_gallery_sort_reverse">역순</label>`);
 imageGalleryBrowser.showDisplayFormat = false;
 imageGalleryBrowser.showDepth = false;
 imageGalleryBrowser.showUpFolder = false;
