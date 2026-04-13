@@ -855,17 +855,16 @@ public static class T2IAPI
             "failed": []
         """)]
     public static async Task<JObject> DeleteIndexedImages(Session session,
-        [API.APIParameter("삭제할 항목 ID 배열이다.")] JArray entry_ids)
+        [API.APIParameter("삭제할 항목 ID 배열이다.")] string[] entry_ids)
     {
-        if (entry_ids is null || entry_ids.Count == 0)
+        if (entry_ids is null || entry_ids.Length == 0)
         {
             return new JObject() { ["error"] = "entry_ids가 비어있습니다." };
         }
         int deleted = 0;
         JArray failed = [];
-        foreach (JToken token in entry_ids)
+        foreach (string entryId in entry_ids)
         {
-            string entryId = token?.ToString();
             if (string.IsNullOrWhiteSpace(entryId))
             {
                 continue;
