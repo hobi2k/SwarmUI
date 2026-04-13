@@ -743,13 +743,14 @@ public class ComfyUIRedirectHelper
         }
         else
         {
-            if (path == "queue" || path.StartsWith("queue?") || path == "api/queue" || path.StartsWith("api/queue?"))
+            if (path == "queue" || path.StartsWith("queue?") || path.StartsWith("queue/") || path == "api/queue" || path.StartsWith("api/queue?") || path.StartsWith("api/queue/"))
             {
                 HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
                 JObject queue = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
                 response = new HttpResponseMessage(HttpStatusCode.OK) { Content = Utilities.JSONContent(FilterQueueResponse(swarmUser, queue)) };
             }
-            else if (path == "history" || path.StartsWith("history?") || path == "api/history" || path.StartsWith("api/history?"))
+            else if (path == "history" || path.StartsWith("history?") || path == "api/history" || path.StartsWith("api/history?")
+                || path.StartsWith("history/") || path.StartsWith("api/history/"))
             {
                 HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
                 JObject history = (await rawResponse.Content.ReadAsStringAsync()).ParseToJson();
