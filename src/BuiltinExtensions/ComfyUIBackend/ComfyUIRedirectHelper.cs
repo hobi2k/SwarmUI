@@ -417,21 +417,6 @@ public class ComfyUIRedirectHelper
                                         {
                                             rawText = StringConversionHelper.UTF8Encoding.GetString(recvBuf[0..received.Count]);
                                             JObject parsed = rawText.ParseToJson();
-                                            JToken typeTok = parsed["type"];
-                                            if (typeTok is not null)
-                                            {
-                                                string type = typeTok.ToString();
-                                                if (type == "executing")
-                                                {
-                                                    client.LastExecuting = parsed;
-                                                    user.LastExecuting = parsed;
-                                                }
-                                                else if (type == "progress")
-                                                {
-                                                    client.LastProgress = parsed;
-                                                    user.LastProgress = parsed;
-                                                }
-                                            }
                                             JToken dataTok = parsed["data"];
                                             if (dataTok is JObject dataObj)
                                             {
@@ -467,7 +452,28 @@ public class ComfyUIRedirectHelper
                                                 {
                                                     continue;
                                                 }
+                                                // 소유권 확인 통과한 이벤트만 LastExecuting/LastProgress에 저장
+                                                string type = parsed["type"]?.ToString();
+                                                if (type == "executing")
+                                                {
+                                                    client.LastExecuting = parsed;
+                                                    user.LastExecuting = parsed;
+                                                }
+                                                else if (type == "progress")
+                                                {
+                                                    client.LastProgress = parsed;
+                                                    user.LastProgress = parsed;
+                                                }
                                                 toSend = Encoding.UTF8.GetBytes(parsed.ToString());
+                                            }
+                                            else
+                                            {
+                                                // data가 JObject가 아닌 메시지(바이너리 프리뷰 등)는 타입 기반으로 필터
+                                                string type = parsed["type"]?.ToString();
+                                                if (type is not null && PromptScopedEventTypes.Contains(type))
+                                                {
+                                                    continue;
+                                                }
                                             }
                                         }
                                         catch (Exception ex)
@@ -477,6 +483,7 @@ public class ComfyUIRedirectHelper
                                     }
                                     else
                                     {
+                                        // LastExecuting/LastProgress는 이미 소유권 검사 통과한 것만 저장되므로 그대로 재전송
                                         if (client.LastExecuting is not null && (client.LastExecuting != user.LastExecuting || client.LastProgress != user.LastProgress))
                                         {
                                             user.LastExecuting = client.LastExecuting;
