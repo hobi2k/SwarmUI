@@ -60,9 +60,6 @@ function normalizeGalleryItemSrc(src) {
     if (!src) {
         return src;
     }
-    if (src.startsWith('View/') || src.startsWith('Output/')) {
-        return `/${src}`;
-    }
     if (src.startsWith('OutputIndex/')) {
         return `/${src}`;
     }
@@ -119,13 +116,10 @@ function listOutputFolderAndFilesForBrowser(path, isRefresh, callback, depth, st
         data.files = preFiles.concat(postFiles);
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            let actualSrc = normalizeGalleryItemSrc(f.web_url ?? f.url ?? `${getImageOutPrefix()}/${fullSrc}`);
-            let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
             return {
                 'name': fullSrc,
                 'data': {
-                    'src': actualSrc,
-                    'preview_src': previewSrc,
+                    'src': normalizeGalleryItemSrc(f.url ?? `${getImageOutPrefix()}/${fullSrc}`),
                     'fullsrc': fullSrc,
                     'name': f.src,
                     'metadata': f.metadata ?? null,
@@ -149,13 +143,10 @@ function listOutputGalleryFolderAndFiles(path, isRefresh, callback, depth) {
     genericRequest('ListIndexedImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': sortReverse}, data => {
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            let actualSrc = normalizeGalleryItemSrc(f.web_url ?? f.url ?? `${getImageOutPrefix()}/${fullSrc}`);
-            let previewSrc = normalizeGalleryItemSrc(f.url ?? f.web_url ?? `${getImageOutPrefix()}/${fullSrc}`);
             return {
                 'name': fullSrc,
                 'data': {
-                    'src': actualSrc,
-                    'preview_src': previewSrc,
+                    'src': normalizeGalleryItemSrc(f.url ?? `${getImageOutPrefix()}/${fullSrc}`),
                     'fullsrc': fullSrc,
                     'name': f.src,
                     'metadata': f.metadata ?? null,
@@ -466,9 +457,8 @@ function buildOutputFileDescription(image, storagePrefix) {
     else if (['wav', 'mp3', 'aac', 'ogg', 'flac'].includes(extension)) {
         forcePreview = 'imgs/audio_placeholder.jpg';
     }
-    let previewBaseSrc = image.data.preview_src || image.data.src;
     let dragImage = forceImage ?? `${image.data.src}`;
-    let imageSrc = forcePreview ?? `${previewBaseSrc}?preview=true${allowAnimToggle}`;
+    let imageSrc = forcePreview ?? `${image.data.src}?preview=true${allowAnimToggle}`;
     let searchable = `${image.data.name}, ${image.data.metadata}, ${image.data.fullsrc}`;
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
     let aspectRatio = parsedMeta.sui_image_params?.width && parsedMeta.sui_image_params?.height ? parsedMeta.sui_image_params.width / parsedMeta.sui_image_params.height : null;

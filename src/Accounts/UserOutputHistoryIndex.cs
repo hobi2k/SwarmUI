@@ -217,8 +217,7 @@ public static class UserOutputHistoryIndex
                 ["src"] = relativeDisplayPath,
                 ["metadata"] = string.IsNullOrWhiteSpace(entry.Metadata) ? null : entry.Metadata,
                 ["entry_id"] = entry.ID,
-                ["url"] = $"OutputIndex/{entry.ID}",
-                ["web_url"] = entry.WebPath
+                ["url"] = $"OutputIndex/{entry.ID}"
             });
         }
         return new JObject()

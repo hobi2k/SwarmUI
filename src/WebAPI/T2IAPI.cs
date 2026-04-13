@@ -734,8 +734,7 @@ public static class T2IAPI
                     "src": "path/to/image.jpg",
                     "metadata": "some-metadata",
                     "entry_id": "out_abc123",
-                    "url": "OutputIndex/out_abc123",
-                    "web_url": "View/local/raw/2024-01-02/example.png"
+                    "url": "OutputIndex/out_abc123"
                 }
             ]
         """)]
