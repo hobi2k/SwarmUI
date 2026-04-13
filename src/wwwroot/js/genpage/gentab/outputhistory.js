@@ -487,7 +487,7 @@ function selectOutputInHistory(image, div) {
     lastHistoryImage = image.data.src;
     lastHistoryImageDiv = div;
     if (div?.closest('#imagegallerybrowser-content')) {
-        imageFullView.showImage(image.data.src, image.data.metadata, 'history', image.data.preview_src || image.data.src);
+        imageFullView.showImage(image.data.src, image.data.metadata, 'history');
         return;
     }
     let curImg = currentImageHelper.getCurrentImage();

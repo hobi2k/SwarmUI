@@ -253,18 +253,17 @@ class ImageFullViewHelper {
         }
     }
 
-    showImage(src, metadata, batchId = null, displaySrc = null) {
+    showImage(src, metadata, batchId = null) {
         this.didPasteState = false;
         this.currentSrc = src;
         this.currentMetadata = metadata;
         this.currentBatchId = batchId;
         this.updateCounter();
         let wasAlreadyOpen = this.isOpen();
-        let renderSrc = displaySrc || src;
-        let isVideo = isVideoExt(renderSrc);
-        let isAudio = isAudioExt(renderSrc);
-        let encodedSrc = escapeHtmlForUrl(renderSrc);
-        let fallbackSrc = isIndexedHistorySrc(renderSrc) && !renderSrc.includes('preview=true') ? `${renderSrc}${renderSrc.includes('?') ? '&' : '?'}preview=true` : '';
+        let isVideo = isVideoExt(src);
+        let isAudio = isAudioExt(src);
+        let encodedSrc = escapeHtmlForUrl(src);
+        let fallbackSrc = isIndexedHistorySrc(src) && !src.includes('preview=true') ? `${src}${src.includes('?') ? '&' : '?'}preview=true` : '';
         let encodedFallbackSrc = escapeHtmlForUrl(fallbackSrc);
         let fallbackAttr = encodedFallbackSrc ? ` data-fallback-src="${encodedFallbackSrc}"` : '';
         let imgHtml = `<img class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" src="${encodedSrc}"${fallbackAttr} onload="imageFullView.onImgLoad()" onerror="imageFullView.onMediaLoadError(this)">`;
