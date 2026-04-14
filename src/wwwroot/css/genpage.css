@@ -775,19 +775,37 @@ body {
 .image_fullview_modal_close {
     position: fixed;
     top: 1rem;
-    right: 10%;
-    width: 0;
-    height: 0;
+    right: 1rem;
     white-space: nowrap;
+    z-index: 2001;
 }
 .image_fullview_modal_counter {
     background-color: color-mix(in srgb, var(--button-background) 50%, transparent);
+    color: var(--text);
+}
+.image_fullview_modal_close_button {
+    margin-left: 0.5rem;
+    min-width: 2.2rem;
+    min-height: 2.2rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--background) 82%, transparent);
     color: var(--text);
 }
 .imageview_modal_imagewrap {
     height: calc(100vh - 7rem);
     max-width: 95vw;
     overflow: hidden;
+    position: relative;
+}
+.imageview_modal_inner_div {
+    position: relative;
+}
+.image_fullview_inline_close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 2500;
 }
 .imageview_popup_modal_img {
     height: 100%;
@@ -818,6 +836,48 @@ body {
     max-width: 95vw;
     overflow: hidden;
     margin: auto;
+}
+.gallery-preview-modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.82);
+    z-index: 3000;
+}
+.gallery-preview-modal.gallery-preview-open {
+    display: flex;
+}
+.gallery-preview-stage {
+    width: min(92vw, 1200px);
+    height: min(88vh, 1400px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.gallery-preview-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08);
+}
+.gallery-preview-close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 999rem;
+    border: 1px solid var(--border-color);
+    background: rgba(20,20,20,0.8);
+    color: var(--text);
+    font-size: 1.1rem;
+    line-height: 1;
+    z-index: 3001;
+}
+.gallery-preview-close:hover {
+    background: rgba(40,40,40,0.92);
 }
 .browser-folder-tree-container {
     width: 15rem;

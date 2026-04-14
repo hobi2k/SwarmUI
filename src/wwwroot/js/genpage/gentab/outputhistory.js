@@ -1,5 +1,6 @@
 
 let registeredMediaButtons = [];
+let galleryPreviewModalElem = null;
 
 /** Registers a media button for extensions. 'mediaTypes' filters by type eg ['audio'], null means all. 'isDefault' promotes to visible (vs More dropdown). 'showInHistory' controls whether button appears in the History panel. */
 function registerMediaButton(name, action, title = '', mediaTypes = null, isDefault = false, showInHistory = true, href = null, is_download = false) {
@@ -55,6 +56,53 @@ function downloadTextFile(filename, content, mimeType = 'application/json') {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+function ensureGalleryPreviewModal() {
+    if (galleryPreviewModalElem) {
+        return galleryPreviewModalElem;
+    }
+    let modal = document.createElement('div');
+    modal.id = 'gallery_preview_modal';
+    modal.className = 'gallery-preview-modal';
+    modal.innerHTML = `
+        <button type="button" class="gallery-preview-close" aria-label="Close">X</button>
+        <div class="gallery-preview-stage">
+            <img class="gallery-preview-image" alt="Gallery preview">
+        </div>`;
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal || findParentOfClass(e.target, 'gallery-preview-close')) {
+            closeGalleryPreviewModal();
+        }
+    });
+    document.body.appendChild(modal);
+    galleryPreviewModalElem = modal;
+    return modal;
+}
+
+function closeGalleryPreviewModal() {
+    let modal = ensureGalleryPreviewModal();
+    modal.classList.remove('gallery-preview-open');
+    let image = modal.querySelector('.gallery-preview-image');
+    if (image) {
+        image.removeAttribute('src');
+    }
+}
+
+function openGalleryPreviewModal(src) {
+    if (!src) {
+        return;
+    }
+    let modal = ensureGalleryPreviewModal();
+    let image = modal.querySelector('.gallery-preview-image');
+    image.src = src;
+    modal.classList.add('gallery-preview-open');
+}
+
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && galleryPreviewModalElem?.classList.contains('gallery-preview-open')) {
+        closeGalleryPreviewModal();
+    }
+});
 
 function readOutputBrowserSettings(storagePrefix, browser) {
     let sortBy = localStorage.getItem(`${storagePrefix}_sort_by`) ?? 'Name';
@@ -174,6 +222,21 @@ function refreshImageGalleryBrowser() {
     }
     imageGalleryBrowser.lastListCache = null;
     imageGalleryBrowser.navigate('');
+}
+
+let imageGalleryRefreshTimeout = null;
+
+function scheduleImageGalleryRefresh() {
+    if (typeof imageGalleryBrowser === 'undefined') {
+        return;
+    }
+    if (imageGalleryRefreshTimeout) {
+        clearTimeout(imageGalleryRefreshTimeout);
+    }
+    imageGalleryRefreshTimeout = setTimeout(() => {
+        imageGalleryRefreshTimeout = null;
+        refreshImageGalleryBrowser();
+    }, 200);
 }
 
 let gallerySelectionMode = false;
@@ -452,7 +515,37 @@ function buildOutputFileDescription(image, storagePrefix) {
     let searchable = `${image.data.name}, ${image.data.metadata}, ${image.data.fullsrc}`;
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
     let aspectRatio = parsedMeta.sui_image_params?.width && parsedMeta.sui_image_params?.height ? parsedMeta.sui_image_params.width / parsedMeta.sui_image_params.height : null;
-    return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list, aspectRatio };
+    return {
+        name,
+        description,
+        buttons,
+        'image': imageSrc,
+        'dragimage': dragImage,
+        className: parsedMeta.is_starred ? 'image-block-starred' : '',
+        searchable,
+        display: name,
+        detail_list,
+        aspectRatio,
+        entryId: image.data.entry_id ?? null,
+        src: image.data.src,
+        fullSrc: image.data.fullsrc,
+        metadataRaw: image.data.metadata ?? null
+    };
+}
+
+function getGalleryViewerSrc(image, storagePrefix = 'image_gallery') {
+    if (!image?.data?.src) {
+        return '';
+    }
+    let src = image.data.src;
+    let extension = (image.data.name || '').split('.').pop()?.toLowerCase();
+    if (!isIndexedHistorySrc(src) || extension == 'html' || ['wav', 'mp3', 'aac', 'ogg', 'flac'].includes(extension) || isVideoExt(src) || isAudioExt(src)) {
+        return src;
+    }
+    let allowAnims = localStorage.getItem(`${storagePrefix}_allow_anims`) != 'false';
+    let allowAnimToggle = allowAnims ? '' : '&noanim=true';
+    let separator = src.includes('?') ? '&' : '?';
+    return `${src}${separator}preview=true${allowAnimToggle}`;
 }
 
 function selectOutputInHistory(image, div) {
@@ -467,13 +560,7 @@ function selectOutputInHistory(image, div) {
     lastHistoryImage = image.data.src;
     lastHistoryImageDiv = div;
     if (div?.closest('#imagegallerybrowser-content')) {
-        imageFullView.showImage(image.data.src, image.data.metadata, 'history');
-        return;
-    }
-    let curImg = currentImageHelper.getCurrentImage();
-    if (curImg && curImg.dataset.src == image.data.src) {
-        curImg.dataset.batch_id = 'history';
-        curImg.click();
+        openGalleryPreviewModal(getGalleryViewerSrc(image));
         return;
     }
     if (image.data.name.endsWith('.html')) {
@@ -484,7 +571,7 @@ function selectOutputInHistory(image, div) {
             div.dataset.metadata = image.data.metadata;
             div.dataset.src = image.data.src;
         }
-        setCurrentImage(image.data.src, div.dataset.metadata, 'history');
+        setCurrentImage(image.data.src, div.dataset.metadata, 'history', false, false, false, false, image.data.fullsrc, image.data.entry_id ?? null);
     }
 }
 

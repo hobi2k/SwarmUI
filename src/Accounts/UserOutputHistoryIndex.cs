@@ -66,11 +66,23 @@ public static class UserOutputHistoryIndex
         {
             return;
         }
+        if (batchIndex < 0)
+        {
+            return;
+        }
+        if (!ShouldIndexMetadata(metadata))
+        {
+            return;
+        }
         string fullPath = Path.GetFullPath(localPath).Replace('\\', '/');
         string displayPath = BuildDisplayPath(webPath, fullPath);
         if (string.IsNullOrWhiteSpace(displayPath))
         {
             displayPath = Path.GetFileName(fullPath);
+        }
+        if (NormalizeVirtualPath(displayPath).StartsWith("raw/", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
         }
         OutputEntry entry = new()
         {
@@ -261,8 +273,16 @@ public static class UserOutputHistoryIndex
             {
                 continue;
             }
+            if (NormalizeVirtualPath(relativePath).StartsWith("raw/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             string webPath = Program.ServerSettings.Paths.AppendUserNameToOutputPath ? $"View/{session.User.UserID}/{relativePath}" : $"Output/{relativePath}";
             string metadata = OutputMetadataTracker.GetMetadataFor(normalizedFile, root, session.User.Settings.StarNoFolders)?.Metadata ?? "";
+            if (!ShouldIndexMetadata(metadata))
+            {
+                continue;
+            }
             OutputEntry entry = new()
             {
                 ID = $"out_{Guid.NewGuid():N}",
@@ -335,22 +355,42 @@ public static class UserOutputHistoryIndex
         {
             return true;
         }
-        if (!string.IsNullOrWhiteSpace(entry.Metadata))
+        if (entry.BatchIndex < 0)
         {
-            try
+            return true;
+        }
+        if (NormalizeVirtualPath(entry.DisplayPath).StartsWith("raw/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return !ShouldIndexMetadata(entry.Metadata);
+    }
+
+    /// <summary>갤러리 인덱스에 포함해야 하는 메타데이터인지 반환한다.</summary>
+    public static bool ShouldIndexMetadata(string metadataText)
+    {
+        if (string.IsNullOrWhiteSpace(metadataText))
+        {
+            return true;
+        }
+        try
+        {
+            JObject metadata = JObject.Parse(metadataText);
+            if ($"{metadata["source"]}" == "comfy_workflow")
             {
-                JObject metadata = JObject.Parse(entry.Metadata);
-                if ($"{metadata["source"]}" == "comfy_workflow" && NormalizeVirtualPath(entry.DisplayPath).StartsWith("raw/", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return false;
             }
-            catch
+            JObject extra = metadata["sui_extra_data"] as JObject;
+            if (extra?["intermediate"] is not null)
             {
-                // 메타데이터가 깨진 경우에는 다른 기본 규칙으로만 판정한다.
+                return false;
             }
         }
-        return false;
+        catch
+        {
+            // 메타데이터가 깨진 경우에는 다른 기본 규칙으로만 판정한다.
+        }
+        return true;
     }
 
     /// <summary>현재 항목이 실제로 아직 존재하는지 반환한다.</summary>

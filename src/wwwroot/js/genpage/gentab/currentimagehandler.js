@@ -237,11 +237,13 @@ class ImageFullViewHelper {
         }
     }
 
-    showImage(src, metadata, batchId = null) {
+    showImage(src, metadata, batchId = null, fullSrc = null, entryId = null) {
         this.didPasteState = false;
         this.currentSrc = src;
         this.currentMetadata = metadata;
         this.currentBatchId = batchId;
+        this.currentFullSrc = fullSrc ?? getImageFullSrc(src);
+        this.currentEntryId = entryId ?? null;
         this.updateCounter();
         let wasAlreadyOpen = this.isOpen();
         let isVideo = isVideoExt(src);
@@ -257,6 +259,9 @@ class ImageFullViewHelper {
         this.content.innerHTML = `
         <div class="modal-dialog" style="display:none">(click outside image to close)</div>
         <div class="imageview_modal_inner_div">
+            <div class="image_fullview_inline_close">
+                <button type="button" class="image_fullview_modal_close_button" onclick="imageFullView.close()">X</button>
+            </div>
             <div class="imageview_modal_imagewrap" id="imageview_modal_imagewrap" style="text-align:center;">
                 ${imgHtml}
             </div>
@@ -266,7 +271,7 @@ class ImageFullViewHelper {
             </div>
         </div>`;
         let subDiv = this.content.querySelector('.image_fullview_extra_buttons');
-        for (let added of buttonsForImage(getImageFullSrc(src), src, metadata)) {
+        for (let added of buttonsForImage(this.currentFullSrc, src, metadata, this.currentEntryId)) {
             if (added.href) {
                 if (added.is_download) {
                     subDiv.appendChild(createDiv(null, 'inline-block', `<a class="text_button basic-button translate" href="${added.href}" title="${added.title}" download>${added.label}</a>`));
@@ -812,7 +817,7 @@ function getImageFullSrc(src) {
     return fullSrc;
 }
 
-function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, smoothAdd = false, canReparse = true, isPlaceholder = false) {
+function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, smoothAdd = false, canReparse = true, isPlaceholder = false, fullSrc = null, entryId = null) {
     currentImgSrc = src;
     if (metadata) {
         metadata = interpretMetadata(metadata);
@@ -829,11 +834,11 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
         image.onload = () => {
             if (!metadata) {
                 parseMetadata(image, (data, parsedMetadata) => {
-                    setCurrentImage(src, parsedMetadata, batchId, previewGrow, false, false);
+                    setCurrentImage(src, parsedMetadata, batchId, previewGrow, false, false, isPlaceholder, fullSrc, entryId);
                 });
             }
             else {
-                setCurrentImage(src, metadata, batchId, previewGrow, false, false);
+                setCurrentImage(src, metadata, batchId, previewGrow, false, false, isPlaceholder, fullSrc, entryId);
             }
         };
         image.src = src;
@@ -919,7 +924,9 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
     img.dataset.src = src;
     img.dataset.metadata = metadata || '{}';
     img.dataset.batch_id = batchId;
-    img.onclick = () => imageFullView.showImage(img.dataset.src, img.dataset.metadata, img.dataset.batch_id);
+    img.dataset.fullsrc = fullSrc ?? getImageFullSrc(src);
+    img.dataset.entry_id = entryId ?? '';
+    img.onclick = () => imageFullView.showImage(img.dataset.src, img.dataset.metadata, img.dataset.batch_id, img.dataset.fullsrc || null, img.dataset.entry_id || null);
     let extrasWrapper = isReuse ? document.getElementById('current-image-extras-wrapper') : createDiv('current-image-extras-wrapper', 'current-image-extras-wrapper');
     extrasWrapper.innerHTML = '';
     let buttons = createDiv(null, 'current-image-buttons');
@@ -1321,6 +1328,9 @@ function gotImageResult(image, metadata, batchId) {
     }
     if ((getUserSetting('AutoSwapImagesIncludesFullView') || imageFullView.currentBatchId == batchId) && imageFullView.isOpen()) {
         imageFullView.showImage(src, metadata, batchId);
+    }
+    if (typeof scheduleImageGalleryRefresh === 'function') {
+        scheduleImageGalleryRefresh();
     }
     return batch_div;
 }

@@ -254,10 +254,6 @@ public class ComfyUIRedirectHelper
                         }.ToString(Newtonsoft.Json.Formatting.None);
                         T2IEngine.ImageOutput imageOutput = new() { File = file, IsReal = true };
                         (string savedUrl, string localPath) = session.SaveImage(imageOutput, batchIndex, saveInput, metadata);
-                        if (savedUrl != "ERROR" && !string.IsNullOrWhiteSpace(localPath))
-                        {
-                            UserOutputHistoryIndex.RecordOutput(session, savedUrl, localPath, metadata, requestId, batchIndex);
-                        }
                         batchIndex++;
                     }
                 }

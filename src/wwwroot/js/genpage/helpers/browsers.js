@@ -536,6 +536,18 @@ class GenPageBrowserClass {
                 div.addEventListener('mouseenter', () => div.title = stripHtmlToText(desc.description), { once: true });
             }
             div.dataset.name = file.name;
+            if (desc.src) {
+                div.dataset.src = desc.src;
+            }
+            if (desc.fullSrc) {
+                div.dataset.fullsrc = desc.fullSrc;
+            }
+            if (desc.metadataRaw !== undefined) {
+                div.dataset.metadata = desc.metadataRaw ?? '';
+            }
+            if (desc.entryId) {
+                div.dataset.entryId = desc.entryId;
+            }
             img.classList.add('lazyload');
             img.dataset.src = desc.image;
             if (desc.dragimage) {
